@@ -1,0 +1,31 @@
+// csip-ocpp-bridge config: try it on one machine, no hardware.
+//
+//   terminal 1: npm run mock-csip         (mock network server on :8080)
+//   terminal 2: npm start -- --config config.example.mock-csip.json
+//   terminal 3: npm run charger-sim -- --url ws://localhost:9030/CP1
+//
+// The mock serves a 5 kW default and a 3 kW control from 10 s to 40 s after it
+// starts, so the charger goes 5000 W -> 3000 W -> 5000 W.
+// Full reference: docs/configuration.md
+{
+    "limitSource": {
+        // "csip": the bridge's own small CSIP-AUS client. No TLS or
+        // certificates, so it's for the mock server only; real sites use "ode-mqtt".
+        "type": "csip",
+        "url": "http://localhost:8080"
+    },
+    "ocpp": {
+        "port": 9030
+    },
+    "chargers": [
+        { "id": "CP1" }
+    ],
+    "bridge": {
+        "pollMs": 2000,           // poll the mock every 2 s, so changes show quickly
+        "commsLostAfterMs": 6000  // 3 missed polls
+    },
+    "log": {
+        "level": "info",
+        "format": "text"
+    }
+}

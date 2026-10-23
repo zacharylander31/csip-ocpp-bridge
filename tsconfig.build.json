@@ -1,0 +1,12 @@
+{
+    // `npm run build`: compile src/ to dist/ for the Docker image, which runs
+    // plain `node dist/main.js` (no tsx/esbuild in production).
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "noEmit": false,
+        "outDir": "dist",
+        "rootDir": "src",
+        "sourceMap": true
+    },
+    "include": ["src"]
+}
