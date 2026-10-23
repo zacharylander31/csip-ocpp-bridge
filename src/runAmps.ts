@@ -7,7 +7,7 @@
 //   NOMIN  OCPP 1.6,   3 phase                 like A3 but minAmpsPerPhase 0 (what goes wrong without it)
 //   WRONG  OCPP 2.0.1, 1 phase                 misconfigured as rateUnit W: the charger rejects the cap
 import { SimCharger } from './chargerSim.js';
-import { DEFAULT_CHARGER_CONFIG, Manager, planCap, type ManagedCharger } from './csms.js';
+import { DEFAULT_CHARGER_CONFIG, Manager, planCap, SETTLE_MS, type ManagedCharger } from './csms.js';
 
 const PORT = 9021;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -20,7 +20,9 @@ function check(what: string, pass: boolean, detail = ''): void {
 
 // 1. The conversion on its own (no chargers needed).
 function checkPlanCap(): void {
-    const amps1 = { ...DEFAULT_CHARGER_CONFIG, rateUnit: 'A' as const, phases: 1 as const };
+    // The sims run on an exact 230 V grid, so these cases convert at 230 V too.
+    const amps1 = { ...DEFAULT_CHARGER_CONFIG, rateUnit: 'A' as const, phases: 1 as const, maxVoltage: 230 };
+    const realGrid = { ...amps1, maxVoltage: DEFAULT_CHARGER_CONFIG.maxVoltage }; // the 253 V default
     const amps3 = { ...amps1, phases: 3 as const };
     const tenths = { ...amps1, ampStep: 0.1 };
     const cases = [
@@ -35,6 +37,9 @@ function checkPlanCap(): void {
         { cfg: DEFAULT_CHARGER_CONFIG, w: 2500.7, limit: 2500, allowedW: 2500, paused: false },
         { cfg: DEFAULT_CHARGER_CONFIG, w: 1000, limit: 0, allowedW: 0, paused: true }, // W charger, < 6 A
         { cfg: { ...DEFAULT_CHARGER_CONFIG, minAmpsPerPhase: 0 }, w: 1000, limit: 1000, allowedW: 1000, paused: false },
+        // Default maxVoltage 253: at 245 V, 13 A would be 3185 W, over a 3000 W share.
+        { cfg: realGrid, w: 3000, limit: 11, allowedW: 2783, paused: false }, // 11.86 A -> 11 A
+        { cfg: realGrid, w: 1500, limit: 0, allowedW: 0, paused: true }, // 5.93 A < 6 A -> pause
     ];
     for (const c of cases) {
         const p = planCap(c.w, c.cfg);
@@ -49,7 +54,6 @@ function checkPlanCap(): void {
 // The readings received between `from` (when the change was acked) and `to`.
 // A reading sent just before the charger replied can be handled a moment
 // after the reply resolves, so skip SETTLE_MS after the ack.
-const SETTLE_MS = 300;
 function readingsBetween(c: ManagedCharger, from: number, to: number): number[] {
     return c.readings.filter((r) => r.at >= from + SETTLE_MS && r.at < to).map((r) => r.watts);
 }
@@ -64,6 +68,7 @@ async function main() {
 
     console.log('\n--- chargers ---');
     const manager = new Manager(undefined, {
+        defaults: { maxVoltage: 230 }, // the sims' grid is exactly 230 V
         chargers: {
             A1: { rateUnit: 'A', phases: 1 },
             A3: { rateUnit: 'A', phases: 3 },

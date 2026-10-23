@@ -11,7 +11,7 @@
 // 4. R16 reboots, and while it's offline the cap changes to 2000 W -> it gets 2000 W on return.
 // 5. Cap removed, R16 reboots -> "no cap" re-sent (Unknown = fine) -> full power.
 import { SimCharger } from './chargerSim.js';
-import { Manager, type ManagedCharger } from './csms.js';
+import { Manager, SETTLE_MS, type ManagedCharger } from './csms.js';
 
 const PORT = 9022;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -37,7 +37,6 @@ async function waitFor(what: string, cond: () => boolean, timeoutMs = 8000): Pro
 // Readings received after `from` (when a change was acked). A reading sent
 // just before the charger replied can be handled a moment after the reply
 // resolves, so skip SETTLE_MS after the ack.
-const SETTLE_MS = 300;
 const readingsSince = (c: ManagedCharger, from: number) =>
     c.readings.filter((r) => r.at >= from + SETTLE_MS).map((r) => r.watts);
 // Three-phase sims report floor(W/3) per phase, so the sum can be up to 2 W low.
@@ -45,7 +44,7 @@ const allNear = (values: number[], expected: number) =>
     values.length > 0 && values.every((w) => w <= expected && w >= expected - 2);
 
 async function main() {
-    const manager = new Manager(undefined, { chargers: { R201: { rateUnit: 'A', phases: 3 } } });
+    const manager = new Manager(undefined, { chargers: { R201: { rateUnit: 'A', phases: 3, maxVoltage: 230 } } }); // sims' grid is exactly 230 V
     await manager.listen(PORT);
     const endpoint = `ws://localhost:${PORT}`;
     const r16Sim = new SimCharger({ id: 'R16', protocol: '1.6', endpoint, evMaxW: 7400 });

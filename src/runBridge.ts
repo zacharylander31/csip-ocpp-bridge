@@ -5,7 +5,7 @@
 import { Bridge } from './bridge.js';
 import { SimCharger } from './chargerSim.js';
 import { CsipClient } from './csipClient.js';
-import { Manager } from './csms.js';
+import { Manager, SETTLE_MS } from './csms.js';
 import { MockCsipServer } from './mockCsipServer.js';
 
 // Different ports from `npm run demo` / `npm run mock-csip`, so they can run alongside.
@@ -67,7 +67,7 @@ async function main() {
         changes.forEach((c, i) => {
             const until = changes[i + 1]?.sentAt ?? Infinity;
             const want = Math.min(EV_MAX_W, c.limitW ?? EV_MAX_W);
-            const got = r.filter((x) => x.at >= c.ackedAt && x.at < until).map((x) => x.watts);
+            const got = r.filter((x) => x.at >= c.ackedAt + SETTLE_MS && x.at < until).map((x) => x.watts);
             if (got.length === 0) problems.push(`${charger.id}: no readings under share ${c.limitW}`);
             if (got.some((w) => w !== want)) problems.push(`${charger.id}: under share ${c.limitW} wanted ${want}, got [${got}]`);
         });

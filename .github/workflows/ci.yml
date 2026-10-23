@@ -42,3 +42,15 @@ jobs:
       - name: site-demo (site meter)
         run: npm run site-demo
         timeout-minutes: 3
+      - name: ode-demo (limits from Open Dynamic Export over MQTT)
+        run: npm run ode-demo
+        timeout-minutes: 3
+      - name: ocpp16-demo (OCPP 1.6J and 2.0.1 chargers)
+        run: npm run ocpp16-demo
+        timeout-minutes: 3
+      - name: amps-demo (amps, three phase, 6 A minimum)
+        run: npm run amps-demo
+        timeout-minutes: 3
+      - name: reconnect-demo (cap re-sent after reboot or reconnect)
+        run: npm run reconnect-demo
+        timeout-minutes: 3
