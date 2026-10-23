@@ -1,9 +1,14 @@
 // The bridge: CSIP-AUS import limit in, OCPP charging caps out.
 //
+// The limit comes from a LimitSource (limitSource.ts): our own CsipClient, or
+// Open Dynamic Export over MQTT. Telemetry only runs when the source is a
+// CsipClient; with ODE in front, ODE reports to the network itself.
+//
 // Three loops:
-//  - poll loop: asks the CSIP-AUS server for the latest clock, default and
-//    controls every `pollMs` (real servers say how often via pollRate, ~60 s).
-//  - apply loop: every `tickMs`, asks the client which limit applies now,
+//  - poll loop: every `pollMs`, asks the source to refresh. For CsipClient
+//    that fetches the latest clock, default and controls (real servers say
+//    how often via pollRate, ~60 s); for MQTT it checks messages are arriving.
+//  - apply loop: every `tickMs`, asks the source which limit applies now,
 //    works out how much of it the chargers may use, and caps or uncaps only
 //    the chargers whose share changed. Control start/end times are hit on
 //    time even between polls, because the client decides from start/end on
@@ -15,11 +20,11 @@
 //    MAX_UNSENT) and sent first next time, after registering the mirrors
 //    again in case the server dropped them.
 //
-// Fail-safe: if no poll has succeeded for `commsLostAfterMs`, the bridge stops
-// trusting the schedule and applies the default control from the last good
-// poll (CSIP-AUS default controls exist for exactly this). When a poll
-// succeeds again, the schedule is back in charge. If the server never gave a
-// default, there is nothing to fall back to and the caps are removed.
+// Fail-safe: if the source has had no good data for `commsLostAfterMs`, the
+// bridge stops trusting the schedule and applies the default control from the
+// last good data (CSIP-AUS default controls exist for exactly this). When good
+// data arrives again, the schedule is back in charge. If the source never gave
+// a default, there is nothing to fall back to and the caps are removed.
 // TODO: check each network's rule for how long "lost" is before relying on this.
 //
 // The rest of the site: CSIP-AUS opModImpLimW limits the whole site's import,
@@ -38,8 +43,9 @@
 // limit), a higher one only when it's at least RAISE_HYSTERESIS_W higher, so
 // meter noise doesn't send a new profile every tick. The cost: a charger can
 // sit up to RAISE_HYSTERESIS_W below what it could have.
-import type { CsipClient, ActiveLimit } from './csipClient.js';
+import { CsipClient } from './csipClient.js';
 import type { ManagedCharger, Metered } from './csms.js';
+import type { ActiveLimit, LimitSource } from './limitSource.js';
 import type { MirrorKind } from './mirrorXml.js';
 import { averageW } from './telemetry.js';
 
@@ -64,7 +70,7 @@ const HOUSE_ESTIMATE_MAX_AGE_MS = 60_000;
 export interface BridgeOptions {
     pollMs?: number;
     tickMs?: number;
-    commsLostAfterMs?: number; // no good poll for this long -> apply the default
+    commsLostAfterMs?: number; // no good data for this long -> apply the default
     siteMeter?: Metered; // omit to treat the chargers as the only load
     log?: (msg: string) => void;
 }
@@ -105,9 +111,8 @@ export class Bridge {
     private running = false;
     private loops: Promise<void>[] = [];
 
-    private discovered = false;
-    private lastGoodPollAt = 0; // ms since epoch; 0 = never, which counts as comms lost
     private commsLost = false; // only used to log the moment it changes
+    private telemetryClient?: CsipClient; // the source, if it's one that takes telemetry
 
     // What each charger has accepted, by charger id. A charger that's missing
     // is 'unknown', so it always gets sent its share on the first tick: we
@@ -126,15 +131,16 @@ export class Bridge {
     private unsent: TelemetryInterval[] = []; // oldest first
 
     constructor(
-        private client: CsipClient,
+        private source: LimitSource,
         private chargers: ManagedCharger[],
         opts: BridgeOptions = {},
     ) {
         if (chargers.length === 0) throw new Error('bridge needs at least one charger');
         this.pollMs = opts.pollMs ?? 60_000;
         this.tickMs = opts.tickMs ?? 1000;
-        // Three missed polls in a row.
-        this.commsLostAfterMs = opts.commsLostAfterMs ?? 3 * this.pollMs;
+        // Ours, else the source's, else three missed polls in a row.
+        this.commsLostAfterMs = opts.commsLostAfterMs ?? source.commsLostAfterMs ?? 3 * this.pollMs;
+        if (source instanceof CsipClient) this.telemetryClient = source;
         this.siteMeter = opts.siteMeter;
         this.mirrors = this.siteMeter ? ['chargers', 'site'] : ['chargers'];
         this.log = opts.log ?? ((m) => console.log(`[BRIDGE] ${m}`));
@@ -165,16 +171,11 @@ export class Bridge {
         }
     }
 
-    // A failed poll leaves the client's last good state untouched, so the
+    // A failed refresh leaves the source's last good state untouched, so the
     // schedule keeps being followed until commsLostAfterMs runs out.
     private async tryPoll(): Promise<void> {
         try {
-            if (!this.discovered) {
-                await this.client.discover();
-                this.discovered = true;
-            }
-            await this.client.poll();
-            this.lastGoodPollAt = Date.now();
+            await this.source.refresh();
         } catch (err) {
             this.log(`poll failed: ${(err as Error).message}`);
         }
@@ -190,14 +191,15 @@ export class Bridge {
     }
 
     private async applyCurrentLimit(): Promise<void> {
-        const commsLost = Date.now() - this.lastGoodPollAt > this.commsLostAfterMs;
+        // lastUpdatedAt 0 (never) counts as comms lost.
+        const commsLost = Date.now() - this.source.lastUpdatedAt > this.commsLostAfterMs;
         if (commsLost !== this.commsLost) {
             this.commsLost = commsLost;
             this.log(commsLost
-                ? `COMMS LOST: no good poll for over ${this.commsLostAfterMs / 1000} s, applying the default control`
+                ? `COMMS LOST: no good data for over ${this.commsLostAfterMs / 1000} s, applying the default control`
                 : 'comms restored, following the schedule again');
         }
-        const limit = commsLost ? this.client.defaultImportLimit() : this.client.activeImportLimit();
+        const limit = commsLost ? this.source.defaultImportLimit() : this.source.activeImportLimit();
 
         this.updateHouseLoad();
         const houseW = this.currentHouseW();
@@ -312,24 +314,27 @@ export class Bridge {
     }
 
     private async telemetryLoop(): Promise<void> {
+        const client = this.telemetryClient;
+        if (!client) return; // not a CsipClient: someone else reports to the network
         // The interval we're in when the loop starts began before we were
         // watching, so its average would be too low. Skip it.
         const startedAt = Date.now();
         let lastEndSec = 0; // the previous interval, server clock
         let lastToMs = 0; // ... and where it ended on the local clock
         while (this.running) {
-            // Register first: the server's answer sets postRate, which decides
-            // where the interval boundaries fall.
-            // (Also where mirrors the server dropped get registered again.)
-            if (!this.discovered) {
+            // Wait for a good poll: it finds the links and the server clock.
+            if (client.lastUpdatedAt === 0) {
                 await this.sleepWhileRunning(this.tickMs);
                 continue;
             }
-            if (!this.client.takesTelemetry) {
+            if (!client.takesTelemetry) {
                 this.log('server has no MirrorUsagePointListLink, not posting telemetry');
                 return;
             }
-            if (!this.mirrorsReady) await this.tryRegisterMirrors();
+            // Register first: the server's answer sets postRate, which decides
+            // where the interval boundaries fall.
+            // (Also where mirrors the server dropped get registered again.)
+            if (!this.mirrorsReady) await this.tryRegisterMirrors(client);
 
             // Sleep to the end of the current interval, on the server's clock.
             const durationSec = this.postRateSec;
@@ -338,11 +343,11 @@ export class Bridge {
             // interval twice if the estimate moved back, and start each
             // interval exactly where the last one ended on the local clock, so
             // no reading is counted twice or missed.
-            let endSec = (Math.floor(this.client.serverTimeSec() / durationSec) + 1) * durationSec;
+            let endSec = (Math.floor(client.serverTimeSec() / durationSec) + 1) * durationSec;
             if (endSec <= lastEndSec) endSec = lastEndSec + durationSec;
             const startSec = endSec - durationSec;
-            const fromMs = startSec === lastEndSec ? lastToMs : this.client.localTimeMs(startSec);
-            const toMs = this.client.localTimeMs(endSec);
+            const fromMs = startSec === lastEndSec ? lastToMs : client.localTimeMs(startSec);
+            const toMs = client.localTimeMs(endSec);
             lastEndSec = endSec;
             lastToMs = toMs;
             await this.sleepWhileRunning(toMs + TELEMETRY_GRACE_MS - Date.now());
@@ -350,7 +355,7 @@ export class Bridge {
             if (fromMs < startedAt) continue;
 
             this.measure(startSec, durationSec, fromMs, toMs);
-            await this.sendUnsent();
+            await this.sendUnsent(client);
         }
     }
 
@@ -385,10 +390,10 @@ export class Bridge {
     }
 
     // Never throws. Leaves mirrorsReady false on failure, so it's tried again.
-    private async tryRegisterMirrors(): Promise<void> {
+    private async tryRegisterMirrors(client: CsipClient): Promise<void> {
         try {
             const postRates = [];
-            for (const kind of this.mirrors) postRates.push(await this.client.registerMirror(kind));
+            for (const kind of this.mirrors) postRates.push(await client.registerMirror(kind));
             // Each mirror has its own postRate; servers give the same one to
             // all of a gateway's mirrors, so use the shortest in case one doesn't.
             this.postRateSec = Math.min(...postRates);
@@ -402,7 +407,7 @@ export class Bridge {
     // Oldest first, stopping at the first failure so they arrive in order.
     // Without registered mirrors they wait for the next interval, when the
     // loop registers again.
-    private async sendUnsent(): Promise<void> {
+    private async sendUnsent(client: CsipClient): Promise<void> {
         if (!this.mirrorsReady) return;
         while (this.unsent.length > 0) {
             const interval = this.unsent[0];
@@ -411,7 +416,7 @@ export class Bridge {
             while (interval.unposted.length > 0) {
                 const kind = interval.unposted[0];
                 try {
-                    await this.client.postReading(kind, {
+                    await client.postReading(kind, {
                         avgW: (kind === 'site' ? interval.siteAvgW : interval.avgW)!,
                         startSec: interval.startSec,
                         durationSec: interval.durationSec,

@@ -18,17 +18,14 @@ import {
     type MirrorKind,
     type MirrorReading,
 } from './mirrorXml.js';
+import type { ActiveLimit, LimitSource } from './limitSource.js';
+
+export type { ActiveLimit } from './limitSource.js';
 
 export interface CsipClientOptions {
     // The device maker's IANA Private Enterprise Number as 8 hex digits (see
     // penHex() in mirrorXml.ts). Ends every mRID the client creates.
     pen?: string;
-}
-
-export interface ActiveLimit {
-    importLimitW: number | undefined; // undefined = no limit applies
-    source: 'control' | 'default' | 'none';
-    mRID?: string; // which control, when source is 'control'
 }
 
 // Parsed XML from xml2js: plain objects, attributes under `$`, all text as
@@ -47,7 +44,7 @@ interface Control {
     importLimitW: number | undefined; // undefined if this control doesn't set an import limit
 }
 
-export class CsipClient {
+export class CsipClient implements LimitSource {
     // Links found by discover().
     private tmHref?: string;
     private ddercHref?: string; // may stay undefined: not every program has a default
@@ -60,6 +57,7 @@ export class CsipClient {
     private readonly pen: string;
 
     // State from the last poll().
+    lastUpdatedAt = 0; // ms since epoch of the last good poll; 0 = never
     private clockOffsetSec = 0; // server clock minus local clock
     private defaultLimitW: number | undefined;
     private controls: Control[] = [];
@@ -96,6 +94,12 @@ export class CsipClient {
         if (!this.tmHref) throw new Error('server gave no TimeLink');
     }
 
+    /** For LimitSource: discover() until it has worked once, then poll(). */
+    async refresh(): Promise<void> {
+        if (!this.dercHref) await this.discover();
+        await this.poll();
+    }
+
     /** Re-read the server clock, the default control and the control list. */
     async poll(): Promise<void> {
         if (!this.tmHref || !this.dercHref) throw new Error('call discover() first');
@@ -123,6 +127,7 @@ export class CsipClient {
                 importLimitW: watts(c.DERControlBase?.opModImpLimW),
             };
         });
+        this.lastUpdatedAt = Date.now();
     }
 
     /** The import limit that applies now, from the last poll(). No network calls. */
