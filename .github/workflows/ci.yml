@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      # Demos run one after another, so timing-sensitive checks don't compete
+      # for CPU. Each exits non-zero on failure, which fails the job. The
+      # per-step timeout catches a demo that hangs instead of exiting.
+      # `npm run mock-csip` is left out: it serves until stopped.
+      - name: demo (OCPP cap and recover)
+        run: npm run demo
+        timeout-minutes: 3
+      - name: check-csip (CSIP-AUS client)
+        run: npm run check-csip
+        timeout-minutes: 3
+      - name: bridge-demo (end to end, two chargers)
+        run: npm run bridge-demo
+        timeout-minutes: 3
+      - name: failsafe-demo (comms loss)
+        run: npm run failsafe-demo
+        timeout-minutes: 3
+      - name: telemetry-demo (posting readings back)
+        run: npm run telemetry-demo
+        timeout-minutes: 3
+      - name: site-demo (site meter)
+        run: npm run site-demo
+        timeout-minutes: 3
