@@ -16,7 +16,7 @@ import net from 'node:net';
 import { Aedes } from 'aedes';
 import { Bridge } from './bridge.js';
 import { SimCharger } from './chargerSim.js';
-import { Manager } from './csms.js';
+import { Manager, SETTLE_MS } from './csms.js';
 import { OdeMqttSource } from './odeMqttSource.js';
 
 // Tab A's ports (8090-8099 / 9010-9019), so this runs alongside the other demos.
@@ -192,7 +192,7 @@ async function main() {
             const want = Math.min(EV_MAX_W, c.limitW ?? EV_MAX_W);
             // Strictly after the ack: a reading stamped in the same millisecond
             // may have arrived just before the reply.
-            const under = r.filter((x) => x.at > c.ackedAt && x.at < until);
+            const under = r.filter((x) => x.at >= c.ackedAt + SETTLE_MS && x.at < until);
             const got = under.map((x) => x.watts);
             const sec = (ms: number) => ((ms - t0) / 1000).toFixed(2);
             if (got.length === 0) problems.push(`${charger.id}: no readings under share ${c.limitW}`);

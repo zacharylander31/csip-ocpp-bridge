@@ -2,12 +2,11 @@
 // capped through the same ManagedCharger API. Each: full power -> 3 kW -> cap
 // removed. Exits non-zero on failure. Port 9020.
 import { SimCharger } from './chargerSim.js';
-import { Manager } from './csms.js';
+import { Manager, SETTLE_MS } from './csms.js';
 
 const PORT = 9020;
 const CAP_W = 3000;
 const EV_MAX_W = 7400;
-const SETTLE_MS = 300;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

@@ -44,7 +44,7 @@
 // meter noise doesn't send a new profile every tick. The cost: a charger can
 // sit up to RAISE_HYSTERESIS_W below what it could have.
 import { CsipClient } from './csipClient.js';
-import type { ManagedCharger, Metered } from './csms.js';
+import { SETTLE_MS, type ManagedCharger, type Metered } from './csms.js';
 import type { ActiveLimit, LimitSource } from './limitSource.js';
 import type { MirrorKind } from './mirrorXml.js';
 import { averageW } from './telemetry.js';
@@ -248,18 +248,20 @@ export class Bridge {
     }
 
     // House load = site meter - what the chargers report. Only from readings
-    // taken after the last change finished: before that, the site meter and
-    // the chargers may have caught the chargers at different limits, the
-    // estimate would jump, and the shares would hunt up and down.
+    // taken SETTLE_MS after the last change finished: before that, the site
+    // meter and the chargers may have caught the chargers at different limits.
+    // A stale (higher) charger reading would make the house look smaller and
+    // hand the chargers more than the limit allows.
     private updateHouseLoad(): void {
         if (!this.siteMeter) return;
+        const settledAt = this.lastChangeAt + SETTLE_MS;
         const site = this.siteMeter.readings.at(-1);
-        if (!site || site.at <= this.lastChangeAt) return;
+        if (!site || site.at < settledAt) return;
 
         let chargersW = 0;
         for (const charger of this.chargers) {
             const r = charger.readings.at(-1);
-            if (r && r.at > this.lastChangeAt) chargersW += r.watts;
+            if (r && r.at >= settledAt) chargersW += r.watts;
             else if (!r || site.at - r.at > CHARGER_IDLE_AFTER_MS) continue; // no car: 0 W
             else return; // it'll report any moment; wait for it
         }

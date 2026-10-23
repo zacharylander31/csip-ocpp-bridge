@@ -1,6 +1,6 @@
 // Week 3 demo: full power -> capped at 3 kW -> cap removed. Exits non-zero on failure.
 import { SimCharger } from './chargerSim.js';
-import { Manager } from './csms.js';
+import { Manager, SETTLE_MS } from './csms.js';
 
 const PORT = 9000;
 const CAP_W = 3000;
@@ -23,9 +23,9 @@ async function main() {
     const charger = await chargerReady;
 
     // A reading can already be in flight when we send a command, so only
-    // readings received after the reply are guaranteed to reflect it (the sim
-    // applies a profile before replying, and one websocket keeps order).
-    // Readings between send and reply are ambiguous and not checked.
+    // readings received SETTLE_MS after the reply are checked (one in flight
+    // can still be handled just after the reply resolves; see csms.ts).
+    // Readings between send and reply + SETTLE_MS are ambiguous and not checked.
     await sleep(4000);
     const capSent = Date.now();
     await charger.capPower(CAP_W);
@@ -41,8 +41,8 @@ async function main() {
 
     const r = charger.readings;
     const before = r.filter((x) => x.at < capSent).map((x) => x.watts);
-    const capped = r.filter((x) => x.at >= capAcked && x.at < clearSent).map((x) => x.watts);
-    const after = r.filter((x) => x.at >= clearAcked).map((x) => x.watts);
+    const capped = r.filter((x) => x.at >= capAcked + SETTLE_MS && x.at < clearSent).map((x) => x.watts);
+    const after = r.filter((x) => x.at >= clearAcked + SETTLE_MS).map((x) => x.watts);
 
     console.log(`\nPower drawn each second (W): [${r.map((x) => x.watts).join(', ')}]`);
 

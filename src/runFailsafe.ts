@@ -8,7 +8,7 @@
 import { Bridge } from './bridge.js';
 import { SimCharger } from './chargerSim.js';
 import { CsipClient } from './csipClient.js';
-import { Manager } from './csms.js';
+import { Manager, SETTLE_MS } from './csms.js';
 import { MockCsipServer } from './mockCsipServer.js';
 
 const CSIP_PORT = 8083;
@@ -71,7 +71,7 @@ async function main() {
     changes.forEach((c, i) => {
         const until = changes[i + 1]?.sentAt ?? Infinity;
         const expectW = Math.min(EV_MAX_W, c.limitW ?? EV_MAX_W);
-        const readings = r.filter((x) => x.at >= c.ackedAt && x.at < until).map((x) => x.watts);
+        const readings = r.filter((x) => x.at >= c.ackedAt + SETTLE_MS && x.at < until).map((x) => x.watts);
         if (readings.length === 0) problems.push(`no readings under ${label(c)}`);
         if (readings.some((w) => w !== expectW)) problems.push(`under ${label(c)} wanted ${expectW}, got [${readings}]`);
     });

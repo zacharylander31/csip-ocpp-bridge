@@ -33,7 +33,8 @@ const BOOT_WAIT_MS = 2000;
 export interface ChargerConfig {
     rateUnit: 'W' | 'A'; // what the charger accepts in a charging profile
     phases: 1 | 3; // phases wired to the charger
-    voltage: number; // per phase
+    voltage: number; // nominal, per phase: decides whether a W share is above the minimum current
+    maxVoltage: number; // highest the supply can reach, per phase: used to turn W into A
     ampStep: number; // amps are rounded down to a multiple of this
     minAmpsPerPhase: number; // below this the car stops: send 0 instead (0 = no minimum)
 }
@@ -42,6 +43,11 @@ export const DEFAULT_CHARGER_CONFIG: ChargerConfig = {
     rateUnit: 'W',
     phases: 1,
     voltage: 230,
+    // A car draws amps x the REAL voltage, and Australian supply often sits at
+    // 240-250 V. Converting a W share to amps at 230 V would let it draw up to
+    // ~10% more than its share. 253 V is the top of AS 60038 (230 V +10%), so
+    // an amps cap worked out at 253 V stays within the share at any legal voltage.
+    maxVoltage: 253,
     // Whole amps: plenty of chargers only take whole amps, and OCPP 1.6's
     // `multipleOf: 0.1` check fails on values like 6.3 in JavaScript
     // (6.3 / 0.1 = 62.99999999999999), so ocpp-rpc's strict mode refuses to send them.
@@ -63,21 +69,33 @@ export interface CapPlan {
  * Always rounds down: a charger must never be allowed more than its share.
  */
 export function planCap(watts: number, cfg: ChargerConfig): CapPlan {
-    const perPhaseA = watts / (cfg.voltage * cfg.phases);
-    if (watts <= 0 || perPhaseA < cfg.minAmpsPerPhase) {
-        return { requestedW: watts, unit: cfg.rateUnit, limit: 0, allowedW: 0, paused: true };
-    }
+    const pause: CapPlan = { requestedW: watts, unit: cfg.rateUnit, limit: 0, allowedW: 0, paused: true };
+    if (watts <= 0) return pause;
     if (cfg.rateUnit === 'W') {
+        // The charger limits watts itself, so the voltage only matters for the minimum.
+        if (watts / (cfg.voltage * cfg.phases) < cfg.minAmpsPerPhase) return pause;
         const limit = Math.floor(watts);
         return { requestedW: watts, unit: 'W', limit, allowedW: limit, paused: false };
     }
+    // Amps at the highest possible voltage, so the real draw never exceeds the share.
     // The small epsilon stops 13.0 / 0.1 = 129.99999 rounding down a whole step;
     // the final round tidies 0.30000000000000004 to 0.3.
+    const perPhaseA = watts / (cfg.maxVoltage * cfg.phases);
     const steps = Math.floor(perPhaseA / cfg.ampStep + 1e-9);
     const amps = Math.round(steps * cfg.ampStep * 1000) / 1000;
-    const allowedW = amps * cfg.voltage * cfg.phases;
-    return { requestedW: watts, unit: 'A', limit: amps, allowedW, paused: amps === 0 };
+    if (amps === 0 || amps < cfg.minAmpsPerPhase) return pause;
+    const allowedW = amps * cfg.maxVoltage * cfg.phases; // worst case
+    return { requestedW: watts, unit: 'A', limit: amps, allowedW, paused: false };
 }
+
+/**
+ * How long after a charger accepts a change before its readings can be
+ * trusted to show it. Not zero: a reading the charger sent just before it
+ * replied can be handled by ocpp-rpc a moment after the reply resolves (seen:
+ * same millisecond, old power), and a real charger's meter may lag too.
+ * Use readings from `ackedAt + SETTLE_MS` onwards.
+ */
+export const SETTLE_MS = 300;
 
 export interface PowerReading {
     at: number; // ms since epoch, when the server received it
