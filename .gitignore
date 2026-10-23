@@ -1,0 +1,21 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# Local config and secrets (CSIP-AUS device certificates and keys must never be committed)
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+config.local.*
+
+# Personal experiments
+scratch/
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db

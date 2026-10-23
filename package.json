@@ -1,0 +1,27 @@
+{
+  "name": "csip-ocpp-bridge",
+  "version": "1.0.0",
+  "description": "Bridge CSIP-AUS network limits to EV chargers over OCPP",
+  "scripts": {
+    "demo": "tsx src/runDemo.ts",
+    "typecheck": "tsc",
+    "mock-csip": "tsx src/runMockCsip.ts",
+    "check-csip": "tsx src/checkCsipClient.ts",
+    "bridge-demo": "tsx src/runBridge.ts",
+    "failsafe-demo": "tsx src/runFailsafe.ts",
+    "telemetry-demo": "tsx src/runTelemetry.ts",
+    "site-demo": "tsx src/runSiteMeter.ts"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "ocpp-rpc": "^2.2.1",
+    "xml2js": "^0.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/xml2js": "^0.4.14",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
