@@ -43,7 +43,8 @@ async function main() {
         mupPostRateSec: POST_RATE_SEC,
     });
 
-    const manager = new Manager(() => {});
+    // No minimum current: this demo's 1000 W shares are below a real car's 6 A (1380 W).
+    const manager = new Manager(() => {}, { defaults: { minAmpsPerPhase: 0 } });
     await manager.listen(OCPP_PORT);
     const sims = CHARGER_IDS.map(
         (id) => new SimCharger({ id, endpoint: `ws://localhost:${OCPP_PORT}`, evMaxW: EV_MAX_W, log: () => {} }),
