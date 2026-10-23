@@ -45,7 +45,8 @@
         "rateUnit": "W",       // what the charger accepts in a charging profile: "W" or "A"
         "phases": 1,           // 1 or 3: phases wired to the charger
         "minAmpsPerPhase": 6   // below this a car stops charging, so the bridge pauses it (0 W) instead
-        // "voltage": 230,     // per phase, for converting W to A. For "A" chargers use 253 (see docs)
+        // "voltage": 230,     // nominal volts per phase: decides when a W share is below the 6 A minimum
+        // "maxVoltage": 253,  // highest legal supply voltage (AS 60038): W is turned into A at this, so an amps cap never lets the car draw more than its share. Leave it.
         // "ampStep": 1        // amps are rounded down to a multiple of this
     },
 
@@ -54,7 +55,7 @@
     // The site limit is split equally between them.
     "chargers": [
         { "id": "CP1" }
-        // { "id": "CP2", "rateUnit": "A", "phases": 3, "voltage": 253 }
+        // { "id": "CP2", "rateUnit": "A", "phases": 3 }
     ],
 
     // Timings. The defaults are fine; shown here so you know they exist.

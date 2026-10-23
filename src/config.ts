@@ -193,7 +193,7 @@ const show = (v: unknown) => JSON.stringify(v) ?? String(v);
 // 2.0.1 allows up to 48 characters; keep to ones that need no URL escaping.
 const CHARGER_ID = /^[A-Za-z0-9._~:@|*+-]{1,48}$/;
 
-const CHARGER_KEYS = ['rateUnit', 'phases', 'voltage', 'ampStep', 'minAmpsPerPhase'] as const;
+const CHARGER_KEYS = ['rateUnit', 'phases', 'voltage', 'maxVoltage', 'ampStep', 'minAmpsPerPhase'] as const;
 
 function chargerSettings(c: Checker, o: Record<string, unknown>, path: string): Partial<ChargerConfig> {
     const out: Partial<ChargerConfig> = {};
@@ -201,12 +201,14 @@ function chargerSettings(c: Checker, o: Record<string, unknown>, path: string): 
     const phases = c.oneOf(o, path, 'phases', [1, 3] as const);
     // AS 60038: 230 V nominal, +10% / -6%. Anything far outside is a typo (e.g. 2300).
     const voltage = c.number(o, path, 'voltage', { min: 180, max: 260 });
+    const maxVoltage = c.number(o, path, 'maxVoltage', { min: 180, max: 260 });
     const ampStep = c.number(o, path, 'ampStep', { above: 0, max: 10 });
     // 32 A is the most a single-phase AC charger takes; a minimum above it can never be met.
     const minAmpsPerPhase = c.number(o, path, 'minAmpsPerPhase', { min: 0, max: 32 });
     if (rateUnit !== undefined) out.rateUnit = rateUnit;
     if (phases !== undefined) out.phases = phases;
     if (voltage !== undefined) out.voltage = voltage;
+    if (maxVoltage !== undefined) out.maxVoltage = maxVoltage;
     if (ampStep !== undefined) out.ampStep = ampStep;
     if (minAmpsPerPhase !== undefined) out.minAmpsPerPhase = minAmpsPerPhase;
     return out;
@@ -291,11 +293,14 @@ export function parseConfig(raw: unknown, file = 'config', env: NodeJS.ProcessEn
         });
     }
     for (const { id, config } of chargers) {
-        if (config.rateUnit === 'A' && config.voltage < 253) {
-            // See tab-b notes: amps are converted at the configured voltage, but the car draws amps x the real voltage.
+        if (config.maxVoltage < config.voltage) {
+            c.problems.push(`charger ${id}: maxVoltage (${config.maxVoltage}) must be at least voltage (${config.voltage})`);
+        }
+        if (config.rateUnit === 'A' && config.maxVoltage < 253) {
+            // W is turned into A at maxVoltage, but the car draws amps x the real voltage.
             warnings.push(
-                `charger ${id} takes amps and voltage is ${config.voltage} V. If the real supply voltage is higher (often 240-250 V), ` +
-                    `the charger can draw more than its share. 253 V (the AS 60038 maximum) is the safe setting.`,
+                `charger ${id} takes amps and maxVoltage is ${config.maxVoltage} V. If the supply goes higher (it can legally reach 253 V), ` +
+                    `the charger can draw more than its share. Leave maxVoltage at its default, 253 V (the AS 60038 maximum).`,
             );
         }
     }

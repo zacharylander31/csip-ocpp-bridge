@@ -88,7 +88,7 @@ ws://<the box's IP address>:9000/<charger id>
 - `<charger id>` must match an `id` in `config.json`'s `chargers` list. Many chargers add their own id to the end of the URL; then enter only `ws://<box>:9000/`.
 - Protocol: OCPP **1.6J** or **2.0.1** (subprotocols `ocpp1.6` and `ocpp2.0.1`; 2.0.1 is chosen if a charger offers both). No TLS or OCPP security profiles yet, so keep the chargers and the box on a private network.
 - Port 9000 is `ocpp.port`. If you change it, change the `ports:` line in `docker-compose.yml` to match.
-- Settings that matter per charger (see [configuration.md](configuration.md#chargerdefaults-and-chargers)): `rateUnit` (does it take W or A), `phases`, `voltage` and `minAmpsPerPhase`. A car stops charging below about 6 A per phase, so when a charger's share is below that, the bridge pauses it (0 W) instead of sending a limit the car can't use. On three-phase that's 4140 W.
+- Settings that matter per charger (see [configuration.md](configuration.md#chargerdefaults-and-chargers)): `rateUnit` (does it take W or A), `phases`, `minAmpsPerPhase`, and for amps chargers `maxVoltage` (leave it at 253 V). A car stops charging below about 6 A per phase, so when a charger's share is below that, the bridge pauses it (0 W) instead of sending a limit the car can't use. On three-phase that's 4140 W.
 - A charger that connects with an id that isn't in the config is **not capped**, and the bridge logs a warning.
 
 ### Check it works
@@ -104,7 +104,7 @@ docker compose logs -f bridge
 Log lines to look for, in order:
 
 ```
-INFO  [main] starting: limits from ode-mqtt (mqtt://mosquitto:1883), 1 charger(s): CP1 (W, 1-phase, 230 V, min 6 A)
+INFO  [main] starting: limits from ode-mqtt (mqtt://mosquitto:1883), 1 charger(s): CP1 (W, 1-phase, 230 V nominal / 253 V max, min 6 A)
 INFO  [ocpp] listening on ws://localhost:9000
 INFO  [ode-mqtt] connected to mqtt://mosquitto:1883, subscribing to limits/csipAus
 INFO  [main] running

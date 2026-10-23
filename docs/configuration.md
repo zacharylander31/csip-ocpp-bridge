@@ -57,7 +57,8 @@ Both OCPP 1.6J and 2.0.1 are always accepted.
 | `id` | string | — | `chargers` only, required | The charger's OCPP identity: the last part of its URL. 1–48 characters from `A-Z a-z 0-9 . _ ~ : @ \| * + -`. Must be unique. |
 | `rateUnit` | `"W"` or `"A"` | `"W"` | both | What the charger accepts in a charging profile. Many chargers only take amps. A charger that rejects every cap usually has this wrong. |
 | `phases` | `1` or `3` | `1` | both | Phases wired to the charger. Amps limits are per phase. |
-| `voltage` | number, 180–260 | 230 | both | Volts per phase, for converting W to A. **For amps chargers use 253** (the AS 60038 maximum): the car draws amps × the *real* voltage, and Australian supply often sits at 240–250 V, so at 230 V configured an amps charger can draw ~6% over its share. A warning is logged for amps chargers below 253 V. |
+| `voltage` | number, 180–260 | 230 | both | Nominal volts per phase. Only decides whether a W charger's share is below the minimum current (`minAmpsPerPhase`). |
+| `maxVoltage` | number, 180–260, ≥ `voltage` | 253 | both | The highest the supply can reach, per phase: W shares are turned into amps at this voltage. A car draws amps × the *real* voltage, and Australian supply often sits at 240–250 V; 253 V is the top of AS 60038 (230 V +10%), so an amps cap worked out at 253 V stays within the share at any legal voltage. The cost is a slightly lower cap (at 240 V real, about 5% under the share). **Leave it at 253**; a warning is logged for amps chargers below that. |
 | `ampStep` | number, > 0 and ≤ 10 | 1 | both | Amps are rounded **down** to a multiple of this. 1 A is safe: OCPP 1.6's schema rejects values like 6.3 A (floating-point `multipleOf: 0.1`). |
 | `minAmpsPerPhase` | number, 0–32 | 6 | both | Below this a car stops charging (IEC 61851), so a smaller share is sent as 0 (pause). That's 1380 W single-phase, 4140 W three-phase at 230 V. 0 = no minimum. |
 
@@ -93,10 +94,10 @@ The bridge checks the whole file before starting anything. If anything is wrong 
 ```
 2026-10-23T04:48:34.980Z ERROR [main] config.json is not valid, not starting:
 2026-10-23T04:48:34.981Z ERROR [main]   - limitSource.password must not be in the config file: set the BRIDGE_MQTT_PASSWORD environment variable instead
-2026-10-23T04:48:34.981Z ERROR [main]   - chargers[0].phase is not a known option (expected one of: id, rateUnit, phases, voltage, ampStep, minAmpsPerPhase)
+2026-10-23T04:48:34.981Z ERROR [main]   - chargers[0].phase is not a known option (expected one of: id, rateUnit, phases, voltage, maxVoltage, ampStep, minAmpsPerPhase)
 2026-10-23T04:48:34.981Z ERROR [main]   - chargers[1].id "CP1" is used twice
 ```
 
 Unknown options are errors on purpose: a typo like `phase` for `phases` would otherwise silently fall back to the default. JSON syntax errors give the position (`not valid JSON: Expected ',' or '}' after property value in JSON at position 13 (line 3 column 3)`); line numbers count comments, since they're blanked out, not removed.
 
-Warnings (the bridge still starts) are logged at `WARN` after the config loads: no `fallbackImportLimitW`, an amps charger below 253 V, a username without a password, or plain-http `csip` to a remote host.
+Warnings (the bridge still starts) are logged at `WARN` after the config loads: no `fallbackImportLimitW`, an amps charger with `maxVoltage` below 253 V, a username without a password, or plain-http `csip` to a remote host.

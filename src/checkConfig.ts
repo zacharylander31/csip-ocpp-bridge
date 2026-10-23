@@ -47,7 +47,7 @@ check(errorsFor(minimal).length === 0, 'minimal ODE config accepted');
 const full = parseConfig({
     limitSource: odeSource,
     chargerDefaults: { phases: 3 },
-    chargers: [{ id: 'CP1' }, { id: 'CP2', phases: 1, rateUnit: 'A', voltage: 253 }],
+    chargers: [{ id: 'CP1' }, { id: 'CP2', phases: 1, rateUnit: 'A', voltage: 240 }],
 }, 'test', {});
 check(full.chargers[0].config.phases === 3 && full.chargers[1].config.phases === 1, 'per-charger settings override chargerDefaults');
 check(full.ocpp.port === 9000 && full.bridge.pollMs === 1000 && full.log.level === 'info', 'defaults: port 9000, ODE poll 1 s, log info');
@@ -59,8 +59,10 @@ check(csip.bridge.pollMs === 60_000, 'csip: default poll 60 s');
 // -- warnings --
 const noFallback = parseConfig({ ...minimal, limitSource: { ...odeSource, fallbackImportLimitW: undefined } }, 'test', {});
 check(noFallback.warnings.some((w) => w.includes('fallbackImportLimitW')), 'warns when fallbackImportLimitW is missing');
-const ampsLowV = parseConfig({ ...minimal, chargers: [{ id: 'CP1', rateUnit: 'A' }] }, 'test', {});
-check(ampsLowV.warnings.some((w) => w.includes('253 V')), 'warns about amps chargers below 253 V');
+const ampsDefault = parseConfig({ ...minimal, chargers: [{ id: 'CP1', rateUnit: 'A' }] }, 'test', {});
+check(ampsDefault.chargers[0].config.maxVoltage === 253 && ampsDefault.warnings.length === 0, 'amps charger: maxVoltage defaults to 253 V, no warning');
+const ampsLowV = parseConfig({ ...minimal, chargers: [{ id: 'CP1', rateUnit: 'A', maxVoltage: 240 }] }, 'test', {});
+check(ampsLowV.warnings.some((w) => w.includes('253 V')), 'warns about amps chargers with maxVoltage below 253 V');
 
 // -- bad configs --
 check(hasError({ ...minimal, limitSource: { ...odeSource, password: 'x' } }, MQTT_PASSWORD_ENV), 'password in the file is rejected');
@@ -70,6 +72,7 @@ check(hasError({ ...minimal, chargers: [{ id: 'CP1' }, { id: 'CP1' }] }, 'used t
 check(hasError({ ...minimal, chargers: [{ id: 'my charger' }] }, 'chargers[0].id must be'), 'charger id with a space rejected');
 check(hasError({ ...minimal, chargers: [] }, 'at least one charger'), 'empty charger list rejected');
 check(hasError({ ...minimal, chargers: [{ id: 'CP1', voltage: 2300 }] }, 'voltage must be'), 'voltage 2300 rejected');
+check(hasError({ ...minimal, chargers: [{ id: 'CP1', voltage: 240, maxVoltage: 235 }] }, 'must be at least voltage'), 'maxVoltage below voltage rejected');
 check(hasError({ ...minimal, limitSource: { ...odeSource, type: 'mqtt' } }, 'limitSource.type must be'), 'unknown source type rejected');
 check(hasError({ ...minimal, limitSource: { ...odeSource, url: 'localhost:1883' } }, 'broker URL'), 'broker URL without mqtt:// rejected');
 check(hasError({ ...minimal, ocpp: { port: 70000 } }, 'ocpp.port'), 'port 70000 rejected');

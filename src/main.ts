@@ -162,6 +162,6 @@ function makeSource(cfg: Config): LimitSource {
 }
 
 function describeCharger(c: Config['chargers'][number]): string {
-    const { rateUnit, phases, voltage, minAmpsPerPhase } = c.config;
-    return `${c.id} (${rateUnit}, ${phases}-phase, ${voltage} V, min ${minAmpsPerPhase} A)`;
+    const { rateUnit, phases, voltage, maxVoltage, minAmpsPerPhase } = c.config;
+    return `${c.id} (${rateUnit}, ${phases}-phase, ${voltage} V nominal / ${maxVoltage} V max, min ${minAmpsPerPhase} A)`;
 }
