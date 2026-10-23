@@ -11,7 +11,10 @@
     "failsafe-demo": "tsx src/runFailsafe.ts",
     "telemetry-demo": "tsx src/runTelemetry.ts",
     "site-demo": "tsx src/runSiteMeter.ts",
-    "ode-demo": "tsx src/runOdeMqtt.ts"
+    "ode-demo": "tsx src/runOdeMqtt.ts",
+    "ocpp16-demo": "tsx src/runOcpp16.ts",
+    "amps-demo": "tsx src/runAmps.ts",
+    "reconnect-demo": "tsx src/runReconnect.ts"
   },
   "license": "Apache-2.0",
   "type": "module",
