@@ -1,0 +1,71 @@
+// csip-ocpp-bridge config: a real site, next to Open Dynamic Export (ODE).
+//
+// Copy this file to config.json and edit it. Comments (// and /* */) are
+// allowed. Unknown options are errors, so a typo stops the bridge at start-up
+// instead of being ignored. Full reference: docs/configuration.md
+{
+    // Where the site's import limit comes from.
+    "limitSource": {
+        // "ode-mqtt": follow ODE's MQTT output. ODE talks CSIP-AUS to the
+        // network (TLS, certificates, registration); the bridge listens.
+        "type": "ode-mqtt",
+
+        // The MQTT broker ODE publishes to: ODE's publish.mqtt.host.
+        // "mosquitto" is the broker's name inside docker-compose.yml.
+        "url": "mqtt://mosquitto:1883",
+
+        // ODE's publish.mqtt.topic. The bridge reads "<topic>/csipAus".
+        "topic": "limits",
+
+        // Optional: only if ODE's publish.mqtt.csipAus is set to something else.
+        // "csipAusTopic": "limits/csipAus",
+
+        // Optional broker login. The password is NEVER in this file: set the
+        // BRIDGE_MQTT_PASSWORD environment variable (e.g. in .env).
+        // "username": "bridge",
+
+        // No valid message from ODE for this long = comms lost, and the
+        // default limit applies. ODE publishes about once a second. Default 10000.
+        "commsLostAfterMs": 10000,
+
+        // RECOMMENDED. The import limit (W) to use on comms loss if the bridge
+        // hasn't seen the network's default yet (e.g. it started during a
+        // control). Use the import limit in your connection agreement, the
+        // same number as ODE's setpoints.csipAus.fixedDefault.importLimitWatts.
+        "fallbackImportLimitW": 1500
+    },
+
+    // The OCPP server chargers connect to: ws://<this box>:<port>/<charger id>
+    "ocpp": {
+        "port": 9000
+    },
+
+    // Settings for every charger, unless a charger below overrides them.
+    "chargerDefaults": {
+        "rateUnit": "W",       // what the charger accepts in a charging profile: "W" or "A"
+        "phases": 1,           // 1 or 3: phases wired to the charger
+        "minAmpsPerPhase": 6   // below this a car stops charging, so the bridge pauses it (0 W) instead
+        // "voltage": 230,     // nominal volts per phase: decides when a W share is below the 6 A minimum
+        // "maxVoltage": 253,  // highest legal supply voltage (AS 60038): W is turned into A at this, so an amps cap never lets the car draw more than its share. Leave it.
+        // "ampStep": 1        // amps are rounded down to a multiple of this
+    },
+
+    // Every charger the bridge manages. The id is the last part of the URL
+    // the charger connects to (its OCPP "charge point identity").
+    // The site limit is split equally between them.
+    "chargers": [
+        { "id": "CP1" }
+        // { "id": "CP2", "rateUnit": "A", "phases": 3 }
+    ],
+
+    // Timings. The defaults are fine; shown here so you know they exist.
+    "bridge": {
+        // "pollMs": 1000,  // how often to check that ODE is still publishing
+        // "tickMs": 1000   // how often to recompute and send caps
+    },
+
+    "log": {
+        "level": "info",   // "debug", "info", "warn" or "error"
+        "format": "text"   // "text" for people, "json" for log collectors
+    }
+}

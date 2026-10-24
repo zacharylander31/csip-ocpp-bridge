@@ -1,0 +1,19 @@
+# Keep the build context small, and keep site files and secrets out of the image.
+node_modules
+dist
+.git
+.github
+.claude
+docs
+plans
+upstream
+scratch
+ode
+mosquitto
+*.log
+.env
+.env.*
+config.json
+config.local.*
+*.pem
+*.key

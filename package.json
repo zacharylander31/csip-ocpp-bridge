@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "description": "Bridge CSIP-AUS network limits to EV chargers over OCPP",
   "scripts": {
+    "start": "tsx src/main.ts",
+    "build": "tsc -p tsconfig.build.json",
     "demo": "tsx src/runDemo.ts",
     "typecheck": "tsc",
     "mock-csip": "tsx src/runMockCsip.ts",
@@ -14,7 +16,10 @@
     "ode-demo": "tsx src/runOdeMqtt.ts",
     "ocpp16-demo": "tsx src/runOcpp16.ts",
     "amps-demo": "tsx src/runAmps.ts",
-    "reconnect-demo": "tsx src/runReconnect.ts"
+    "reconnect-demo": "tsx src/runReconnect.ts",
+    "charger-sim": "tsx src/runChargerSim.ts",
+    "config-test": "tsx src/checkConfig.ts",
+    "runtime-demo": "tsx src/runMain.ts"
   },
   "license": "Apache-2.0",
   "type": "module",
@@ -29,5 +34,8 @@
     "aedes": "^1.2.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

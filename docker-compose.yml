@@ -1,0 +1,65 @@
+# csip-ocpp-bridge next to Open Dynamic Export (ODE), on one site box.
+#
+#   network (CSIP-AUS) --> ODE --MQTT--> mosquitto --> bridge --OCPP--> chargers
+#
+# Before the first `docker compose up -d` (details: docs/install.md):
+#   1. cp config.example.json config.json             and edit it (the bridge)
+#   2. cp ode/config.example.json ode/config/config.json   and edit it (ODE)
+#   3. put ODE's CSIP-AUS certificate and key in ode/config/ (cert.pem, key.pem)
+#
+# The bridge's MQTT password, if you set one, goes in a .env file next to
+# this one (BRIDGE_MQTT_PASSWORD=...), never in config.json.
+
+name: csip-ocpp-bridge
+
+services:
+    bridge:
+        build: .
+        image: csip-ocpp-bridge:local
+        init: true
+        restart: unless-stopped
+        depends_on:
+            - mosquitto
+        ports:
+            # Chargers on the LAN connect to ws://<this box>:9000/<charger id>.
+            # The second number must match ocpp.port in config.json.
+            - '9000:9000'
+        volumes:
+            - ./config.json:/config/config.json:ro
+        environment:
+            BRIDGE_MQTT_PASSWORD: ${BRIDGE_MQTT_PASSWORD:-}
+        # Give it time to stop cleanly (it leaves the chargers' caps in place).
+        stop_grace_period: 15s
+
+    mosquitto:
+        image: eclipse-mosquitto:2.0.22
+        restart: unless-stopped
+        # No `ports:` on purpose: only ODE and the bridge, on this compose
+        # network, can reach the broker. See mosquitto/mosquitto.conf.
+        volumes:
+            - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+    # From ODE's own docker-compose.yml (github.com/longzheng/open-dynamic-export),
+    # pinned to the version the bridge was checked against.
+    open-dynamic-export:
+        image: longzhengau/open-dynamic-export:v0.20.0
+        restart: unless-stopped
+        depends_on:
+            - mosquitto
+        # ODE's .env.example values, set here so there's one less file to copy.
+        environment:
+            TZ: ${TZ:-Australia/Melbourne}
+            SERVER_PORT: '3000'
+            CONFIG_DIR: ./config # inside the container: /app/config
+            SEP2_CERT_FILE: cert.pem # in ode/config/
+            SEP2_KEY_FILE: key.pem
+            SEP2_PEN: '62223' # ODE's default; "does not need to be changed" per ODE's .env.example
+        ports:
+            - '3000:3000' # ODE's dashboard: http://<this box>:3000
+        volumes:
+            - ./ode/config/:/app/config/
+            - ./ode/logs/:/app/logs/
+        # ODE's compose runs it privileged for USB (RS-485) inverters and
+        # meters. Only uncomment if you use one: it gives the container full
+        # access to the host.
+        # privileged: true

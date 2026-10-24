@@ -1,0 +1,42 @@
+{
+    "setpoints": {
+        "csipAus": {
+            "host": "https://sep2-test.energyq.com.au",
+            "dcapUri": "/api/v2/dcap",
+            "fixedDefault": {
+                "exportLimitWatts": 1500,
+                "importLimitWatts": 1500
+            }
+        }
+    },
+    "inverters": [
+        {
+            "type": "sunspec",
+            "connection": {
+                "type": "tcp",
+                "ip": "192.168.1.6",
+                "port": 502
+            },
+            "unitId": 1
+        }
+    ],
+    "inverterControl": {
+        "enabled": true
+    },
+    "meter": {
+        "type": "sunspec",
+        "connection": {
+            "type": "tcp",
+            "ip": "192.168.1.6",
+            "port": 502
+        },
+        "unitId": 240,
+        "location": "feedin"
+    },
+    "publish": {
+        "mqtt": {
+            "host": "mqtt://mosquitto:1883",
+            "topic": "limits"
+        }
+    }
+}
