@@ -20,6 +20,13 @@ jobs:
 
       - run: npm run typecheck
 
+      # What the Docker image runs: tsc to dist/.
+      - run: npm run build
+
+      - name: config-test (config loader)
+        run: npm run config-test
+        timeout-minutes: 3
+
       # Demos run one after another, so timing-sensitive checks don't compete
       # for CPU. Each exits non-zero on failure, which fails the job. The
       # per-step timeout catches a demo that hangs instead of exiting.
@@ -54,3 +61,32 @@ jobs:
       - name: reconnect-demo (cap re-sent after reboot or reconnect)
         run: npm run reconnect-demo
         timeout-minutes: 3
+      - name: runtime-demo (npm start from config, real SIGTERM)
+        run: npm run runtime-demo
+        timeout-minutes: 3
+
+  # Separate job: a Docker problem shouldn't hide the demo results, and this
+  # is the only place the Docker files get checked (ubuntu-latest has Docker).
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # The compose file mounts the site's own config files, which aren't in
+      # the repo; use the examples so it validates and the image can --check.
+      - name: Prepare example config
+        run: |
+          cp config.example.json config.json
+          mkdir -p ode/config
+          cp ode/config.example.json ode/config/config.json
+
+      - name: docker compose config
+        run: docker compose config --quiet
+
+      - name: docker build
+        run: docker build -t csip-ocpp-bridge:ci .
+
+      - name: Image validates the example config
+        # Same mount as docker-compose.yml; BRIDGE_CONFIG in the image points at it.
+        run: docker run --rm -v "$PWD/config.json:/config/config.json:ro" csip-ocpp-bridge:ci node dist/main.js --check
