@@ -476,6 +476,8 @@ export class Manager {
         const key = `${id} ${reason}`;
         const now = Date.now();
         if (now - (this.lastRejectLog.get(key) ?? 0) < REJECT_LOG_EVERY_MS) return;
+        // Forget entries over a minute old, or a device trying endless made-up ids grows this forever.
+        for (const [k, at] of this.lastRejectLog) if (now - at >= REJECT_LOG_EVERY_MS) this.lastRejectLog.delete(k);
         this.lastRejectLog.set(key, now);
         this.log(msg);
     }
