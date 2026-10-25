@@ -90,7 +90,7 @@ One MirrorUsagePoint for the chargers (roleFlags `45`: mirror + PEV + submeter) 
 
 ## Known simplifications
 
-- No TLS or OCPP security profiles.
+- OCPP Security Profile 1 only (optional per-charger passwords, plain text without TLS); no TLS (Security Profile 2/3).
 - No stack levels or time-limited schedules in charging profiles.
 - Single-phase amps-to-watts conversion (230 V).
 - Equal split between chargers: an idle charger keeps its share.

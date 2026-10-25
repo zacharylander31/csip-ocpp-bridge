@@ -14,6 +14,9 @@
 // - Reconnect: the ManagedCharger outlives its connection. When a charger
 //   comes back (rebooted or not), the current cap is sent again, and the
 //   charger only counts as `compliant` once it has accepted it.
+// - Passwords (OCPP Security Profile 1): a charger given a password must send
+//   it with HTTP Basic auth when it connects, or it's refused (see `passwords`).
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { RPCClient, RPCServer } from 'ocpp-rpc';
 
 // The server's per-charger connection has the same call/handle API as a client.
@@ -328,10 +331,32 @@ export interface ManagerOptions {
      * capped and can push the site over the network's limit.
      */
     onlyKnownChargers?: boolean;
+    /**
+     * OCPP Security Profile 1: per charger id, the password it must send (HTTP
+     * Basic auth, username = its id). A charger listed here that sends no
+     * password or the wrong one is refused with HTTP 401. A charger NOT listed
+     * connects without one, so a site can mix chargers that support SP1 with
+     * ones that don't. Empty by default, so demos can just connect.
+     */
+    passwords?: Record<string, string>;
 }
 
 // A refused charger retries every few seconds; log it once a minute, not every time.
 const REJECT_LOG_EVERY_MS = 60_000;
+
+/**
+ * Whether the password a charger sent matches the expected one, in constant
+ * time. A plain `===` stops at the first wrong character, so an attacker
+ * timing many tries could guess the password a character at a time.
+ * timingSafeEqual doesn't stop early, but needs two buffers of the same
+ * length; hashing both first gives that (32 bytes each) and also hides the
+ * real password's length. Exported for tests.
+ */
+export function passwordMatches(sent: Buffer, expected: Buffer): boolean {
+    const a = createHash('sha256').update(sent).digest();
+    const b = createHash('sha256').update(expected).digest();
+    return timingSafeEqual(a, b);
+}
 
 export class Manager {
     /** Every charger expected or seen since start, connected or not (see `connected`). */
@@ -339,35 +364,58 @@ export class Manager {
     private server: RPCServer;
     private waiters = new Map<string, ((c: ManagedCharger) => void)[]>();
     private transactionNo = 0; // 1.6: the CSMS hands out transaction ids
-    private lastRejectLog = new Map<string, number>(); // charger id -> when we last logged refusing it
+    private lastRejectLog = new Map<string, number>(); // "<id> <reason>" -> when we last logged it
+    private passwords = new Map<string, Buffer>(); // charger id -> the password it must send
 
     constructor(
         private log: (msg: string) => void = (m) => console.log(`[CSMS] ${m}`),
         private options: ManagerOptions = {},
     ) {
+        for (const [id, password] of Object.entries(options.passwords ?? {})) {
+            this.passwords.set(id, Buffer.from(password, 'utf8'));
+        }
         // Listed in order of preference, if a charger offers both.
         this.server = new RPCServer({ protocols: ['ocpp2.0.1', 'ocpp1.6'], strictMode: true });
 
-        // Runs during the HTTP upgrade, before the WebSocket exists: an
-        // unknown charger never gets a connection, so it can't send us
+        // Runs during the HTTP upgrade, before the WebSocket exists: a
+        // refused charger never gets a connection, so it can't send us
         // anything or be mistaken for a managed one.
+        //
+        // Never put a password (sent or expected) in a log line: logs get
+        // copied into bug reports and log collectors.
         this.server.auth((accept, reject, handshake) => {
             const id = handshake.identity;
-            if (!this.options.onlyKnownChargers || this.chargers.has(id)) {
-                accept(); // ocpp-rpc then picks the subprotocol as before
+            const from = handshake.remoteAddress;
+
+            if (this.options.onlyKnownChargers && !this.chargers.has(id)) {
+                const known = [...this.chargers.keys()].join(', ');
+                this.logRefusal(id, 'unknown',
+                    `REJECTED charger "${id}" from ${from}: not a configured charger ` +
+                        `(configured: ${known}; ids are case-sensitive). It is NOT being capped.`);
+                // OCPP-J: a CSMS that doesn't recognise the identity in the URL should answer 404.
+                reject(404, 'Unknown charging station identity');
                 return;
             }
-            const now = Date.now();
-            if (now - (this.lastRejectLog.get(id) ?? 0) >= REJECT_LOG_EVERY_MS) {
-                this.lastRejectLog.set(id, now);
-                const known = [...this.chargers.keys()].join(', ');
-                this.log(
-                    `REJECTED charger "${id}" from ${handshake.remoteAddress}: not a configured charger ` +
-                        `(configured: ${known}; ids are case-sensitive). It is NOT being capped.`,
-                );
+
+            const expected = this.passwords.get(id);
+            // ocpp-rpc only fills in `password` if the Basic auth username is the charger's id.
+            const sent = handshake.password;
+            if (expected !== undefined && (sent === undefined || !passwordMatches(sent, expected))) {
+                const why = sent === undefined ? 'no password' : 'wrong password';
+                this.logRefusal(id, why,
+                    `REJECTED charger "${id}" from ${from}: ${why} (HTTP 401). If this is the real charger, ` +
+                        `set its OCPP password (2.0.1 BasicAuthPassword / 1.6 AuthorizationKey) to the one the bridge has. ` +
+                        `It is NOT being capped.`);
+                // HTTP Basic auth (RFC 7235): missing or wrong credentials are 401 Unauthorized.
+                reject(401, 'Unauthorized');
+                return;
             }
-            // OCPP-J: a CSMS that doesn't recognise the identity in the URL should answer 404.
-            reject(404, 'Unknown charging station identity');
+            if (expected === undefined && sent !== undefined && this.passwords.size > 0) {
+                // Likely a charger set up with a password the bridge wasn't told about.
+                this.logRefusal(id, 'unchecked',
+                    `${id} sent a password, but none is configured for it, so it was not checked`);
+            }
+            accept(); // ocpp-rpc then picks the subprotocol as before
         });
 
         this.server.on('client', (client: ServerClient) => {
@@ -421,6 +469,15 @@ export class Manager {
             this.chargers.set(id, charger);
         }
         return charger;
+    }
+
+    // A refused charger retries every few seconds: log each (charger, reason) once a minute.
+    private logRefusal(id: string, reason: string, msg: string): void {
+        const key = `${id} ${reason}`;
+        const now = Date.now();
+        if (now - (this.lastRejectLog.get(key) ?? 0) < REJECT_LOG_EVERY_MS) return;
+        this.lastRejectLog.set(key, now);
+        this.log(msg);
     }
 
     private configFor(id: string): ChargerConfig {

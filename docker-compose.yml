@@ -7,8 +7,10 @@
 #   2. cp ode/config.example.json ode/config/config.json   and edit it (ODE)
 #   3. put ODE's CSIP-AUS certificate and key in ode/config/ (cert.pem, key.pem)
 #
-# The bridge's MQTT password, if you set one, goes in a .env file next to
-# this one (BRIDGE_MQTT_PASSWORD=...), never in config.json.
+# Passwords go in a .env file next to this one, never in config.json:
+# BRIDGE_MQTT_PASSWORD=... if the broker needs one, and each charger's
+# password under the name its passwordEnv gives (e.g. BRIDGE_CP1_PASSWORD=...).
+# After editing .env, run `docker compose up -d` again (restart doesn't reload it).
 
 name: csip-ocpp-bridge
 
@@ -26,6 +28,11 @@ services:
             - '9000:9000'
         volumes:
             - ./config.json:/config/config.json:ro
+        # Every variable in .env reaches the bridge (only the bridge), so a
+        # charger's passwordEnv can name any of them. No .env is fine.
+        env_file:
+            - path: .env
+              required: false
         environment:
             BRIDGE_MQTT_PASSWORD: ${BRIDGE_MQTT_PASSWORD:-}
         # Give it time to stop cleanly (it leaves the chargers' caps in place).

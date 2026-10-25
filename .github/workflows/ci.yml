@@ -64,6 +64,9 @@ jobs:
       - name: runtime-demo (npm start from config, real SIGTERM)
         run: npm run runtime-demo
         timeout-minutes: 3
+      - name: sp1-demo (charger passwords, OCPP Security Profile 1)
+        run: npm run sp1-demo
+        timeout-minutes: 3
 
   # Separate job: a Docker problem shouldn't hide the demo results, and this
   # is the only place the Docker files get checked (ubuntu-latest has Docker).

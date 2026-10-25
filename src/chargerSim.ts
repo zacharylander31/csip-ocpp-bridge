@@ -24,6 +24,7 @@ export interface SimChargerOptions {
     evMaxW?: number; // what the car would draw with no cap
     evMinAmpsPerPhase?: number; // below this the car stops (default 0 = never stops)
     meterIntervalMs?: number;
+    password?: string; // OCPP Security Profile 1: sent with HTTP Basic auth (username = id)
     log?: (msg: string) => void;
 }
 
@@ -45,6 +46,7 @@ export class SimCharger {
     private evMinAmpsPerPhase: number;
     private meterIntervalMs: number;
     private endpoint: string;
+    private password?: string;
     private log: (msg: string) => void;
 
     private client!: RPCClient;
@@ -67,6 +69,7 @@ export class SimCharger {
         this.evMaxW = opts.evMaxW ?? 7400;
         this.evMinAmpsPerPhase = opts.evMinAmpsPerPhase ?? 0;
         this.meterIntervalMs = opts.meterIntervalMs ?? 1000;
+        this.password = opts.password;
         this.log = opts.log ?? ((m) => console.log(`[${this.id}] ${m}`));
     }
 
@@ -125,6 +128,9 @@ export class SimCharger {
             protocols: [this.protocol === '1.6' ? 'ocpp1.6' : 'ocpp2.0.1'],
             strictMode: true, // validate every message against the OCPP JSON schemas
             reconnect: false, // reconnect()/reboot() decide when to come back
+            // ocpp-rpc sends "Authorization: Basic base64(<id>:<password>)" on connect.
+            // A refused connect rejects with err.code = the HTTP status (401, 404).
+            ...(this.password !== undefined && { password: this.password }),
         } as ConstructorParameters<typeof RPCClient>[0]);
 
         this.client.handle('SetChargingProfile', async ({ params }) => ({

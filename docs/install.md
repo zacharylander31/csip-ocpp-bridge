@@ -37,7 +37,7 @@ The mock serves a 5 kW default, then a 3 kW control from 10 s to 40 s after it s
 
 ### What you need
 
-- A Raspberry Pi-class Linux box (or any machine with Docker and Docker Compose v2) on the same network as the chargers.
+- A Raspberry Pi-class Linux box (or any machine with Docker and Docker Compose v2.24 or later: `docker compose version`) on the same network as the chargers.
 - An [Open Dynamic Export](https://github.com/longzheng/open-dynamic-export) (ODE) setup for your network: its CSIP-AUS server address, and the device certificate and key your network issued. ODE handles the CSIP-AUS connection, TLS and certificates; this bridge does not. ODE also needs a site meter configured ([ODE meter docs](https://github.com/longzheng/open-dynamic-export/blob/main/docs/configuration/meter.md)).
 - One or more OCPP chargers (1.6J or 2.0.1) that you can point at a custom central system (CSMS) URL.
 
@@ -66,7 +66,11 @@ The mock serves a 5 kW default, then a 3 kW control from 10 s to 40 s after it s
    cp ode/config.example.json ode/config/config.json
    ```
 4. Put ODE's CSIP-AUS certificate and key in `ode/config/` as `cert.pem` and `key.pem`. (`ode/config/` is in `.gitignore`, so they can't be committed by accident.)
-5. Only if your broker needs a password: create a `.env` file next to `docker-compose.yml` with `BRIDGE_MQTT_PASSWORD=...`. The password never goes in `config.json`.
+5. Passwords go in a `.env` file next to `docker-compose.yml`, never in `config.json` (see [Charger passwords](#charger-passwords-ocpp-security-profile-1) below):
+   - `BRIDGE_MQTT_PASSWORD=...`, only if your broker needs a password;
+   - one line per charger password, e.g. `BRIDGE_CP1_PASSWORD=...`, named by that charger's `passwordEnv` in `config.json`.
+
+   Make it readable only by you: `chmod 600 .env`. It's in `.gitignore`.
 6. Check the bridge config, then start everything:
    ```bash
    docker compose run --rm bridge node dist/main.js --check
@@ -86,10 +90,32 @@ ws://<the box's IP address>:9000/<charger id>
 ```
 
 - `<charger id>` must match an `id` in `config.json`'s `chargers` list. Many chargers add their own id to the end of the URL; then enter only `ws://<box>:9000/`.
-- Protocol: OCPP **1.6J** or **2.0.1** (subprotocols `ocpp1.6` and `ocpp2.0.1`; 2.0.1 is chosen if a charger offers both). No TLS or OCPP security profiles yet, so keep the chargers and the box on a private network.
+- Protocol: OCPP **1.6J** or **2.0.1** (subprotocols `ocpp1.6` and `ocpp2.0.1`; 2.0.1 is chosen if a charger offers both). Optional charger passwords (Security Profile 1, below); no TLS yet, so keep the chargers and the box on a private network.
 - Port 9000 is `ocpp.port`. If you change it, change the `ports:` line in `docker-compose.yml` to match.
 - Settings that matter per charger (see [configuration.md](configuration.md#chargerdefaults-and-chargers)): `rateUnit` (does it take W or A), `phases`, `minAmpsPerPhase`, and for amps chargers `maxVoltage` (leave it at 253 V). A car stops charging below about 6 A per phase, so when a charger's share is below that, the bridge pauses it (0 W) instead of sending a limit the car can't use. On three-phase that's 4140 W.
 - Only chargers listed in the config can connect. Any other id is **refused** (HTTP 404) and the bridge logs `REJECTED charger "<id>"` with the ids it expected. Ids are case-sensitive: copy the id exactly as the charger's OCPP settings show it.
+
+### Charger passwords (OCPP Security Profile 1)
+
+Without a password, any device on your network that knows a charger's id can connect as that charger, and the real charger is then never capped. OCPP Security Profile 1 fixes that: the charger sends a password with HTTP Basic auth every time it connects, and the bridge refuses it (HTTP 401) if the password is missing or wrong.
+
+1. Make a random password for each charger (16 to 40 characters; this gives 24 letters, digits, `-` and `_`):
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(18).toString('base64url'))"
+   ```
+2. Enter it in the charger's OCPP settings. It's usually called *password*, *basic auth password* or *authorization key* (OCPP 2.0.1: `BasicAuthPassword`; 1.6: `AuthorizationKey`). Set the security profile to 1 if the charger asks. Use a different password for each charger.
+3. Put it in `.env` and tell the bridge its name, per charger:
+   ```
+   BRIDGE_CP1_PASSWORD=<the password>
+   ```
+   ```jsonc
+   "chargers": [{ "id": "CP1", "passwordEnv": "BRIDGE_CP1_PASSWORD" }]
+   ```
+4. `docker compose up -d` (not `restart`: that keeps the old environment and misses changes to `.env`). A wrong password shows as `REJECTED charger "CP1" ...: wrong password (HTTP 401)` in `docker compose logs bridge`. The bridge never logs a password.
+
+A charger without `passwordEnv` still connects without one, so a charger that doesn't support passwords can share a site with ones that do; the bridge warns about it at start-up.
+
+**Security Profile 1 is not encryption.** Without TLS, the password crosses your network in plain text on every connect (Basic auth is only base64, which anyone can decode), and so does every OCPP message. Anyone who can watch that traffic (a compromised device on the same network or Wi-Fi) can copy the password. It stops a misconfigured or casual device from posing as a charger; it does not stop a determined attacker on your LAN. Keep the chargers and the box on a private network or VLAN. The next step is Security Profile 2 (TLS, `wss://`), which the bridge doesn't support yet.
 
 ### Check it works
 
@@ -104,7 +130,7 @@ docker compose logs -f bridge
 Log lines to look for, in order:
 
 ```
-INFO  [main] starting: limits from ode-mqtt (mqtt://mosquitto:1883), 1 charger(s): CP1 (W, 1-phase, 230 V nominal / 253 V max, min 6 A)
+INFO  [main] starting: limits from ode-mqtt (mqtt://mosquitto:1883), 1 charger(s): CP1 (W, 1-phase, 230 V nominal / 253 V max, min 6 A, password from BRIDGE_CP1_PASSWORD)
 INFO  [ocpp] listening on ws://localhost:9000
 INFO  [ode-mqtt] connected to mqtt://mosquitto:1883, subscribing to limits/csipAus
 INFO  [main] running

@@ -71,6 +71,8 @@ const manager = new Manager(ocppLog, {
     // A charger we don't manage is never capped and can push the site over the
     // network's limit, so only configured ids may connect (refused with 404).
     onlyKnownChargers: true,
+    // OCPP Security Profile 1: chargers with a passwordEnv must send that password.
+    passwords: Object.fromEntries(config.chargers.filter((c) => c.password).map((c) => [c.id, c.password!])),
 });
 // Create the configured chargers now, before they connect, so the bridge can
 // own them from the start; they're attached when that id connects. Until then
@@ -147,5 +149,7 @@ function makeSource(cfg: Config): LimitSource {
 
 function describeCharger(c: Config['chargers'][number]): string {
     const { rateUnit, phases, voltage, maxVoltage, minAmpsPerPhase } = c.config;
-    return `${c.id} (${rateUnit}, ${phases}-phase, ${voltage} V nominal / ${maxVoltage} V max, min ${minAmpsPerPhase} A)`;
+    // Says where the password comes from, never what it is.
+    const password = c.passwordEnv ? `password from ${c.passwordEnv}` : 'no password';
+    return `${c.id} (${rateUnit}, ${phases}-phase, ${voltage} V nominal / ${maxVoltage} V max, min ${minAmpsPerPhase} A, ${password})`;
 }

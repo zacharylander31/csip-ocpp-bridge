@@ -84,6 +84,30 @@ check(
 );
 const many = errorsFor({ limitSource: { type: 'csip' }, chargers: [{ phases: 2 }], ocpp: { port: 'x' } });
 check(many.length >= 4, `all problems reported at once (${many.length}): ${many.join(' | ')}`);
+
+// -- charger passwords (OCPP Security Profile 1) --
+const GOOD_PW = 'Xq7-vT2_kL9pR4mZ'; // 16 characters
+const pwOf = (raw: unknown, env: NodeJS.ProcessEnv) => parseConfig(raw, 'test', env);
+const sp1 = pwOf({ ...minimal, chargers: [{ id: 'CP1', passwordEnv: 'CP1_PW' }] }, { CP1_PW: GOOD_PW });
+check(sp1.chargers[0].password === GOOD_PW && sp1.chargers[0].passwordEnv === 'CP1_PW' && sp1.warnings.length === 0, 'charger password read from its passwordEnv');
+check(errorsFor({ ...minimal, chargers: [{ id: 'CP1', password: GOOD_PW }] }).some((p) => p.includes('chargers[0].password must not be in the config file')), 'charger password in the file is rejected');
+check(errorsFor({ ...minimal, chargers: [{ id: 'CP1', passwordEnv: 'CP1_PW' }] }).some((p) => p.includes('CP1_PW is not set')), 'passwordEnv naming an unset variable is an error');
+check(errorsFor({ ...minimal, chargers: [{ id: 'CP1', passwordEnv: 'my-var' }] }).some((p) => p.includes('environment variable name')), 'passwordEnv that is not a variable name rejected');
+check(errorsFor({ ...minimal, chargerDefaults: { passwordEnv: 'X' } }).some((p) => p.includes('passwords are per charger')), 'passwordEnv in chargerDefaults rejected');
+const pwErrors = (pw: string) => errorsFor({ ...minimal, chargers: [{ id: 'CP1', passwordEnv: 'CP1_PW' }] }, { CP1_PW: pw });
+const short = pwErrors('short-pw-123');
+check(short.some((p) => p.includes('is 12 characters; OCPP needs 16 to 40')), 'password shorter than 16 rejected');
+check(!short.some((p) => p.includes('short-pw-123')), 'password error does not repeat the password');
+check(pwErrors('a'.repeat(41)).some((p) => p.includes('is 41 characters')), 'password longer than 40 rejected');
+check(pwErrors(`${GOOD_PW}\n`).some((p) => p.includes('trailing newline')), 'password with a trailing newline rejected');
+check(pwErrors('a'.repeat(40)).length === 0, '40-character password accepted');
+const mixed = pwOf({ ...minimal, chargers: [{ id: 'CP1', passwordEnv: 'CP1_PW' }, { id: 'CP2' }] }, { CP1_PW: GOOD_PW });
+check(mixed.warnings.some((w) => w.includes('CP2 have no passwordEnv')), 'warns about chargers without a password when others have one');
+const shared = pwOf({ ...minimal, chargers: [{ id: 'CP1', passwordEnv: 'PW' }, { id: 'CP2', passwordEnv: 'PW' }] }, { PW: GOOD_PW });
+check(shared.warnings.some((w) => w.includes('share one password')), 'warns when two chargers share a password');
+const hex40 = pwOf({ ...minimal, chargers: [{ id: 'CP1', passwordEnv: 'PW' }] }, { PW: 'ab'.repeat(20) });
+check(hex40.warnings.some((w) => w.includes('40 hex digits')), 'warns about a 40-hex-digit password (1.6 binary key confusion)');
+
 try {
     loadConfig('does-not-exist.json', {});
     check(false, 'missing file rejected');
