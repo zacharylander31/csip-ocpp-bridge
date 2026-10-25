@@ -11,8 +11,12 @@
 //   --amps-only                reject caps in W, like many real chargers
 //   --max-w 7400               what the car draws with no cap (default 7400)
 //   --min-amps 6               car stops below this per phase (default 0: never stops)
+//   --password <password>      OCPP Security Profile 1 password (HTTP Basic auth).
+//                              Visible in your shell history and process list:
+//                              fine for a test password, not a real one.
 //
-// It waits for the bridge if it isn't up yet. Ctrl+C stops it.
+// It waits for the bridge if it isn't up yet. Ctrl+C stops it. If the bridge
+// refuses it (wrong/missing password: 401, unknown id: 404) it says why and exits.
 // Limitation: if the bridge restarts, the sim doesn't reconnect by itself
 // (SimCharger has no auto-reconnect); restart the sim too.
 
@@ -32,11 +36,12 @@ const { values } = parseArgs({
         'amps-only': { type: 'boolean', default: false },
         'max-w': { type: 'string', default: '7400' },
         'min-amps': { type: 'string', default: '0' },
+        password: { type: 'string' },
     },
 });
 
 function fail(msg: string): never {
-    console.error(`charger-sim: ${msg}\nusage: npm run charger-sim -- --url ws://localhost:9030/CP1 [--protocol 1.6] [--phases 3] [--amps-only]`);
+    console.error(`charger-sim: ${msg}\nusage: npm run charger-sim -- --url ws://localhost:9030/CP1 [--protocol 1.6] [--phases 3] [--amps-only] [--password <pw>]`);
     process.exit(2);
 }
 
@@ -67,16 +72,21 @@ const sim = new SimCharger({
     acceptsW: !values['amps-only'],
     evMaxW: number('max-w', values['max-w']),
     evMinAmpsPerPhase: number('min-amps', values['min-amps']),
+    password: values.password,
     log: (m) => log.info(m),
 });
 
-log.info(`connecting to ${values.url} (OCPP ${protocol}, ${phases}-phase${values['amps-only'] ? ', amps only' : ''})`);
+const details = [`OCPP ${protocol}`, `${phases}-phase`, values['amps-only'] && 'amps only', values.password !== undefined && 'with password'];
+log.info(`connecting to ${values.url} (${details.filter(Boolean).join(', ')})`);
 for (;;) {
     try {
         await sim.start();
         break;
     } catch (err) {
-        const e = err as Error & { code?: string };
+        const e = err as Error & { code?: string | number };
+        // Refusals won't fix themselves by retrying, unlike a bridge that isn't up yet.
+        if (e.code === 401) fail(`the bridge refused ${id}: ${values.password === undefined ? 'it needs a password (--password)' : 'wrong password'}`);
+        if (e.code === 404) fail(`the bridge refused ${id}: it isn't a configured charger (ids are case-sensitive)`);
         log.warn(`can't connect (${e.message || e.code || String(err)}), retrying in ${RETRY_MS / 1000} s`);
         await new Promise((r) => setTimeout(r, RETRY_MS));
     }

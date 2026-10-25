@@ -53,9 +53,16 @@
     // Every charger the bridge manages. The id is the last part of the URL
     // the charger connects to (its OCPP "charge point identity").
     // The site limit is split equally between them.
+    //
+    // RECOMMENDED: a password per charger (OCPP Security Profile 1), so no
+    // other device on the network can connect as it. The password is NEVER in
+    // this file: put it in .env (BRIDGE_CP1_PASSWORD=...) and name the variable
+    // here with "passwordEnv". Set the same password on the charger.
+    // How-to and limits (no TLS = plain text on the LAN): docs/install.md
     "chargers": [
         { "id": "CP1" }
-        // { "id": "CP2", "rateUnit": "A", "phases": 3 }
+        // { "id": "CP1", "passwordEnv": "BRIDGE_CP1_PASSWORD" },
+        // { "id": "CP2", "rateUnit": "A", "phases": 3, "passwordEnv": "BRIDGE_CP2_PASSWORD" }
     ],
 
     // Timings. The defaults are fine; shown here so you know they exist.

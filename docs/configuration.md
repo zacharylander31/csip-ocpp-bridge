@@ -10,7 +10,7 @@ The bridge reads one config file at start-up. Start from an example:
 - **Format:** JSON, with `//` and `/* */` comments allowed. JSON because Open Dynamic Export's config is JSON too (one format for an installer to learn), and it needs no parser library. Comments are stripped before parsing.
 - **Where:** `./config.json` by default. Override with `--config <path>` (`npm start -- --config my.json`) or the `BRIDGE_CONFIG` environment variable. In Docker it's mounted at `/config/config.json`.
 - **Check without starting:** `npm start -- --check`, or `docker compose run --rm bridge node dist/main.js --check`.
-- **Secrets** never go in the file. The only one today is the MQTT password: environment variable `BRIDGE_MQTT_PASSWORD`. A `password` key in the file is an error.
+- **Secrets** never go in the file: config files get copied, pasted into bug reports and committed. They come from environment variables (in Docker: the `.env` file next to `docker-compose.yml`). The MQTT password is `BRIDGE_MQTT_PASSWORD`; each charger's password is in the variable its `passwordEnv` names. A `password` key in the file is an error.
 - Changes need a restart (`docker compose restart bridge`).
 
 ## Options
@@ -55,6 +55,7 @@ Both OCPP 1.6J and 2.0.1 are always accepted.
 | Option | Type | Default | Where | What it does |
 |---|---|---|---|---|
 | `id` | string | — | `chargers` only, required | The charger's OCPP identity: the last part of its URL. 1–48 characters from `A-Z a-z 0-9 . _ ~ : @ \| * + -`. Must be unique. |
+| `passwordEnv` | environment variable name | none | `chargers` only | OCPP Security Profile 1: the name of the environment variable holding this charger's password, e.g. `"BRIDGE_CP1_PASSWORD"`. The charger must then send that password (HTTP Basic auth, username = its id) or it's refused with HTTP 401. The password must be 16–40 printable ASCII characters with no spaces (OCPP's limits); letters, digits, `-` and `_` are safest. Start-up fails if the variable is unset or the password is invalid (the error never shows the password). Without `passwordEnv` the charger connects without a password. Not allowed in `chargerDefaults`: give each charger its own. See [install.md](install.md#charger-passwords-ocpp-security-profile-1), including why this is not encryption. |
 | `rateUnit` | `"W"` or `"A"` | `"W"` | both | What the charger accepts in a charging profile. Many chargers only take amps. A charger that rejects every cap usually has this wrong. |
 | `phases` | `1` or `3` | `1` | both | Phases wired to the charger. Amps limits are per phase. |
 | `voltage` | number, 180–260 | 230 | both | Nominal volts per phase. Only decides whether a W charger's share is below the minimum current (`minAmpsPerPhase`). |
@@ -62,7 +63,7 @@ Both OCPP 1.6J and 2.0.1 are always accepted.
 | `ampStep` | number, > 0 and ≤ 10 | 1 | both | Amps are rounded **down** to a multiple of this. 1 A is safe: OCPP 1.6's schema rejects values like 6.3 A (floating-point `multipleOf: 0.1`). |
 | `minAmpsPerPhase` | number, 0–32 | 6 | both | Below this a car stops charging (IEC 61851), so a smaller share is sent as 0 (pause). That's 1380 W single-phase, 4140 W three-phase at 230 V. 0 = no minimum. |
 
-Chargers not in the list can still connect, but are **not capped**; the bridge logs a warning.
+Chargers not in the list are **refused** at the handshake (HTTP 404) and logged as `REJECTED charger "<id>"`, at most once a minute per id. A charger with a `passwordEnv` that sends no password or the wrong one is refused with HTTP 401, logged the same way.
 
 ### `bridge`: timings
 
@@ -84,7 +85,8 @@ Timestamps are UTC. The same warning repeated within a minute is printed once, t
 ### Not configurable yet
 
 - A site meter (the code supports one, but only the simulated meter exists).
-- OCPP security profiles (TLS, basic auth). Unknown charger ids are refused, but nothing stops a device on your network from using a configured id.
+- OCPP Security Profiles 2 and 3 (TLS, `wss://`, client certificates). Profile 1 (passwords, `passwordEnv`) is supported, but without TLS the password crosses the network in plain text.
+- Setting a charger's password from the bridge (2.0.1 `SetVariables` / 1.6 `ChangeConfiguration`); set it in the charger's own settings.
 - Reading a charger's W/A and phase capabilities from the charger instead of from this file.
 
 ## Validation errors
@@ -100,4 +102,4 @@ The bridge checks the whole file before starting anything. If anything is wrong 
 
 Unknown options are errors on purpose: a typo like `phase` for `phases` would otherwise silently fall back to the default. JSON syntax errors give the position (`not valid JSON: Expected ',' or '}' after property value in JSON at position 13 (line 3 column 3)`); line numbers count comments, since they're blanked out, not removed.
 
-Warnings (the bridge still starts) are logged at `WARN` after the config loads: no `fallbackImportLimitW`, an amps charger with `maxVoltage` below 253 V, a username without a password, or plain-http `csip` to a remote host.
+Warnings (the bridge still starts) are logged at `WARN` after the config loads: no `fallbackImportLimitW`, an amps charger with `maxVoltage` below 253 V, a username without a password, plain-http `csip` to a remote host, some chargers with a `passwordEnv` and some without, two chargers sharing one password variable, or a charger password that is exactly 40 hex digits (some OCPP 1.6 chargers treat that as a hex-encoded binary key and send different bytes).

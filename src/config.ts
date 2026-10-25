@@ -16,7 +16,10 @@
 // every problem is reported at once, with its path, before anything starts.
 //
 // Secrets never come from the file: the MQTT password is read from the
-// BRIDGE_MQTT_PASSWORD environment variable.
+// BRIDGE_MQTT_PASSWORD environment variable, and each charger's OCPP password
+// from the environment variable its `passwordEnv` names. Config files get
+// copied, pasted into bug reports and committed to git; environment variables
+// (from Docker's .env file) stay on the box.
 
 import { readFileSync } from 'node:fs';
 import { DEFAULT_CHARGER_CONFIG, type ChargerConfig } from './csms.js';
@@ -44,6 +47,9 @@ export type LimitSourceConfig =
 export interface ChargerEntry {
     id: string;
     config: ChargerConfig; // defaults + chargerDefaults + this charger's own settings
+    /** OCPP Security Profile 1 password, from the environment variable `passwordEnv` names. Never log it. */
+    password?: string;
+    passwordEnv?: string;
 }
 
 export interface Config {
@@ -195,6 +201,32 @@ const CHARGER_ID = /^[A-Za-z0-9._~:@|*+-]{1,48}$/;
 
 const CHARGER_KEYS = ['rateUnit', 'phases', 'voltage', 'maxVoltage', 'ampStep', 'minAmpsPerPhase'] as const;
 
+// An environment variable name, as shells and Docker's .env files accept it.
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// OCPP passwords. 2.0.1 (Part 2, SecurityCtrlr.BasicAuthPassword) allows 16
+// to 40 characters; the 1.6 security whitepaper's AuthorizationKey is also
+// at least 16. See plans/notes/sp1-passwords.md for the references.
+export const PASSWORD_MIN = 16;
+export const PASSWORD_MAX = 40;
+// Printable ASCII without spaces: HTTP Basic auth (RFC 7617) wants text, and
+// a space or newline at the end is almost always a copy-paste accident.
+const PASSWORD_CHARS = /^[\x21-\x7E]+$/;
+
+/**
+ * What's wrong with a password, without ever repeating it (error messages
+ * end up in logs), or undefined if it's fine.
+ */
+export function passwordProblem(password: string): string | undefined {
+    if (!PASSWORD_CHARS.test(password)) {
+        return 'contains a space, newline or non-ASCII character (a trailing newline from copy-paste?); use letters, digits, - and _';
+    }
+    if (password.length < PASSWORD_MIN || password.length > PASSWORD_MAX) {
+        return `is ${password.length} characters; OCPP needs ${PASSWORD_MIN} to ${PASSWORD_MAX}`;
+    }
+    return undefined;
+}
+
 function chargerSettings(c: Checker, o: Record<string, unknown>, path: string): Partial<ChargerConfig> {
     const out: Partial<ChargerConfig> = {};
     const rateUnit = c.oneOf(o, path, 'rateUnit', ['W', 'A'] as const);
@@ -212,6 +244,28 @@ function chargerSettings(c: Checker, o: Record<string, unknown>, path: string): 
     if (ampStep !== undefined) out.ampStep = ampStep;
     if (minAmpsPerPhase !== undefined) out.minAmpsPerPhase = minAmpsPerPhase;
     return out;
+}
+
+// Read and check one charger's password from the environment.
+function chargerPassword(c: Checker, warnings: string[], path: string, id: string, name: string, env: NodeJS.ProcessEnv): string | undefined {
+    const password = env[name];
+    if (!password) {
+        // An error, not a warning: starting anyway would lock the charger out.
+        c.problems.push(`${path}.passwordEnv: environment variable ${name} is not set or is empty (set it, or remove passwordEnv to let ${id} connect without a password)`);
+        return undefined;
+    }
+    const problem = passwordProblem(password);
+    if (problem) {
+        c.problems.push(`${path}: the password in ${name} ${problem}`);
+        return undefined;
+    }
+    if (/^[0-9A-Fa-f]{40}$/.test(password)) {
+        warnings.push(
+            `charger ${id}: the password in ${name} is 40 hex digits. Some OCPP 1.6 chargers read that as a hex-encoded ` +
+                `20-byte key and send the raw bytes instead, which won't match. Prefer letters and digits.`,
+        );
+    }
+    return password;
 }
 
 /** Check an already-parsed config object. Throws ConfigError listing every problem. */
@@ -275,7 +329,10 @@ export function parseConfig(raw: unknown, file = 'config', env: NodeJS.ProcessEn
     };
 
     // -- chargers --
-    const defaultsRaw = root.chargerDefaults === undefined ? {} : c.object(root.chargerDefaults, 'chargerDefaults', [...CHARGER_KEYS]) ?? {};
+    const defaultsRaw = root.chargerDefaults === undefined ? {} : c.object(root.chargerDefaults, 'chargerDefaults', [...CHARGER_KEYS, 'passwordEnv']) ?? {};
+    if (defaultsRaw.passwordEnv !== undefined) {
+        c.problems.push('chargerDefaults.passwordEnv: passwords are per charger (with one shared password any charger can pose as another); set passwordEnv on each charger');
+    }
     const defaults = chargerSettings(c, defaultsRaw, 'chargerDefaults');
     const chargers: ChargerEntry[] = [];
     if (!Array.isArray(root.chargers) || root.chargers.length === 0) {
@@ -284,13 +341,38 @@ export function parseConfig(raw: unknown, file = 'config', env: NodeJS.ProcessEn
         const seen = new Set<string>();
         root.chargers.forEach((entry, i) => {
             const p = `chargers[${i}]`;
-            const o = c.object(entry, p, ['id', ...CHARGER_KEYS]);
+            const o = c.object(entry, p, ['id', 'passwordEnv', 'password', ...CHARGER_KEYS]);
             if (!o) return;
             const id = c.string(o, p, 'id', true, CHARGER_ID, 'must be 1-48 letters, digits or ._~:@|*+- (it goes in the charger\'s OCPP URL)');
             if (id && seen.has(id)) c.problems.push(`${p}.id "${id}" is used twice`);
             seen.add(id);
-            chargers.push({ id, config: { ...DEFAULT_CHARGER_CONFIG, ...defaults, ...chargerSettings(c, o, p) } });
+            if (o.password !== undefined) {
+                c.problems.push(`${p}.password must not be in the config file: put it in an environment variable (e.g. in .env) and name that variable in ${p}.passwordEnv`);
+            }
+            const passwordEnv = c.string(o, p, 'passwordEnv', false, ENV_NAME, 'must be an environment variable name like "BRIDGE_CP1_PASSWORD"');
+            const password = passwordEnv && ENV_NAME.test(passwordEnv) ? chargerPassword(c, warnings, p, id, passwordEnv, env) : undefined;
+            chargers.push({
+                id,
+                config: { ...DEFAULT_CHARGER_CONFIG, ...defaults, ...chargerSettings(c, o, p) },
+                ...(passwordEnv && { passwordEnv }),
+                ...(password && { password }),
+            });
         });
+    }
+    const withPassword = chargers.filter((ch) => ch.passwordEnv);
+    if (withPassword.length > 0) {
+        const without = chargers.filter((ch) => !ch.passwordEnv).map((ch) => ch.id);
+        if (without.length > 0) {
+            warnings.push(
+                `charger(s) ${without.join(', ')} have no passwordEnv: any device on the network that knows the id can connect as them. ` +
+                    'Fine for a charger without OCPP password support (Security Profile 1); otherwise give each one a password.',
+            );
+        }
+        const byEnv = new Map<string, string[]>();
+        for (const ch of withPassword) byEnv.set(ch.passwordEnv!, [...(byEnv.get(ch.passwordEnv!) ?? []), ch.id]);
+        for (const [name, ids] of byEnv) {
+            if (ids.length > 1) warnings.push(`chargers ${ids.join(', ')} share one password (${name}): each can pose as the other. Give each its own.`);
+        }
     }
     for (const { id, config } of chargers) {
         if (config.maxVoltage < config.voltage) {
