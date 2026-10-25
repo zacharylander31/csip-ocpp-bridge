@@ -84,7 +84,7 @@ Timestamps are UTC. The same warning repeated within a minute is printed once, t
 ### Not configurable yet
 
 - A site meter (the code supports one, but only the simulated meter exists).
-- OCPP security profiles (TLS, basic auth), and rejecting unknown charger ids.
+- OCPP security profiles (TLS, basic auth). Unknown charger ids are refused, but nothing stops a device on your network from using a configured id.
 - Reading a charger's W/A and phase capabilities from the charger instead of from this file.
 
 ## Validation errors

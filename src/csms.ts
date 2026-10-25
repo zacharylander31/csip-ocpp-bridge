@@ -178,6 +178,11 @@ export class ManagedCharger implements Metered {
         return this.client !== undefined;
     }
 
+    /** Whether it has ever connected (false for a charger created by Manager.expect that hasn't yet). */
+    get hasConnected(): boolean {
+        return this.connectionNo > 0;
+    }
+
     /**
      * True when the charger is connected and has accepted Bridge's latest
      * request on this connection. False right after a reconnect, until the
@@ -316,14 +321,25 @@ export interface ManagerOptions {
     /** Per charger id, over `defaults`. */
     chargers?: Record<string, Partial<ChargerConfig>>;
     bootWaitMs?: number;
+    /**
+     * Refuse any charger id not added with expect(), at the WebSocket
+     * handshake. Off by default so demos can just connect; the real program
+     * turns it on, because a charger we accept but don't manage is never
+     * capped and can push the site over the network's limit.
+     */
+    onlyKnownChargers?: boolean;
 }
 
+// A refused charger retries every few seconds; log it once a minute, not every time.
+const REJECT_LOG_EVERY_MS = 60_000;
+
 export class Manager {
-    /** Every charger seen since start, connected or not (see `connected`). */
+    /** Every charger expected or seen since start, connected or not (see `connected`). */
     readonly chargers = new Map<string, ManagedCharger>();
     private server: RPCServer;
     private waiters = new Map<string, ((c: ManagedCharger) => void)[]>();
     private transactionNo = 0; // 1.6: the CSMS hands out transaction ids
+    private lastRejectLog = new Map<string, number>(); // charger id -> when we last logged refusing it
 
     constructor(
         private log: (msg: string) => void = (m) => console.log(`[CSMS] ${m}`),
@@ -332,11 +348,33 @@ export class Manager {
         // Listed in order of preference, if a charger offers both.
         this.server = new RPCServer({ protocols: ['ocpp2.0.1', 'ocpp1.6'], strictMode: true });
 
+        // Runs during the HTTP upgrade, before the WebSocket exists: an
+        // unknown charger never gets a connection, so it can't send us
+        // anything or be mistaken for a managed one.
+        this.server.auth((accept, reject, handshake) => {
+            const id = handshake.identity;
+            if (!this.options.onlyKnownChargers || this.chargers.has(id)) {
+                accept(); // ocpp-rpc then picks the subprotocol as before
+                return;
+            }
+            const now = Date.now();
+            if (now - (this.lastRejectLog.get(id) ?? 0) >= REJECT_LOG_EVERY_MS) {
+                this.lastRejectLog.set(id, now);
+                const known = [...this.chargers.keys()].join(', ');
+                this.log(
+                    `REJECTED charger "${id}" from ${handshake.remoteAddress}: not a configured charger ` +
+                        `(configured: ${known}; ids are case-sensitive). It is NOT being capped.`,
+                );
+            }
+            // OCPP-J: a CSMS that doesn't recognise the identity in the URL should answer 404.
+            reject(404, 'Unknown charging station identity');
+        });
+
         this.server.on('client', (client: ServerClient) => {
             const id = client.identity!;
             const version: OcppVersion = client.protocol === 'ocpp1.6' ? '1.6' : '2.0.1';
             let charger = this.chargers.get(id);
-            const returning = charger !== undefined;
+            const returning = charger?.hasConnected ?? false;
             if (!charger) {
                 charger = new ManagedCharger(id, this.configFor(id), this.log);
                 this.chargers.set(id, charger);
@@ -369,6 +407,20 @@ export class Manager {
             for (const resolve of this.waiters.get(id) ?? []) resolve(charger);
             this.waiters.delete(id);
         });
+    }
+
+    /**
+     * Expect a charger: create its ManagedCharger now, before it connects, so
+     * the bridge can own it from the start (it's offline until it connects).
+     * With onlyKnownChargers, only expected ids are let in.
+     */
+    expect(id: string): ManagedCharger {
+        let charger = this.chargers.get(id);
+        if (!charger) {
+            charger = new ManagedCharger(id, this.configFor(id), this.log);
+            this.chargers.set(id, charger);
+        }
+        return charger;
     }
 
     private configFor(id: string): ChargerConfig {

@@ -23,13 +23,12 @@ import { parseArgs } from 'node:util';
 import { Bridge } from './bridge.js';
 import { ConfigError, loadConfig, type Config } from './config.js';
 import { CsipClient } from './csipClient.js';
-import { ManagedCharger, Manager } from './csms.js';
+import { Manager } from './csms.js';
 import type { LimitSource } from './limitSource.js';
 import { configureLogging, createLogger, logFn } from './log.js';
 import { OdeMqttSource } from './odeMqttSource.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
-const UNKNOWN_CHARGER_CHECK_MS = 10_000;
 
 const log = createLogger('main');
 
@@ -69,17 +68,15 @@ const ocppLog = logFn('ocpp');
 const manager = new Manager(ocppLog, {
     chargers: Object.fromEntries(config.chargers.map((c) => [c.id, c.config])),
     bootWaitMs: config.ocpp.bootWaitMs,
+    // A charger we don't manage is never capped and can push the site over the
+    // network's limit, so only configured ids may connect (refused with 404).
+    onlyKnownChargers: true,
 });
 // Create the configured chargers now, before they connect, so the bridge can
-// own them from the start. Manager reuses an existing entry when that id
-// connects (that's how it handles reconnects), so these get attached then.
-// Until then they're offline: the bridge's sends fail and are retried, and
-// the charger gets its share as soon as it connects.
-const chargers = config.chargers.map((c) => {
-    const charger = new ManagedCharger(c.id, c.config, ocppLog);
-    manager.chargers.set(c.id, charger);
-    return charger;
-});
+// own them from the start; they're attached when that id connects. Until then
+// they're offline: the bridge's sends fail and are retried, and the charger
+// gets its share as soon as it connects.
+const chargers = config.chargers.map((c) => manager.expect(c.id));
 
 const source = makeSource(config);
 const bridge = new Bridge(source, chargers, {
@@ -95,18 +92,6 @@ log.info(`chargers connect to ws://<this machine>:${config.ocpp.port}/<id>, e.g.
 if (source instanceof OdeMqttSource) source.start();
 await bridge.start();
 log.info('running');
-
-// Manager accepts any charger id. One that isn't in the config is never
-// capped, so it can push the site over the network's limit: say so loudly.
-const warnedUnknown = new Set<string>();
-const unknownCheck = setInterval(() => {
-    for (const [id, charger] of manager.chargers) {
-        if (charger.connected && !config.chargers.some((c) => c.id === id) && !warnedUnknown.has(id)) {
-            warnedUnknown.add(id);
-            log.warn(`charger "${id}" connected but is not in ${configFile}: it is NOT being capped. Add it to "chargers" and restart.`);
-        }
-    }
-}, UNKNOWN_CHARGER_CHECK_MS);
 
 // ---- shutdown ----
 
@@ -124,7 +109,6 @@ async function shutdown(signal: string): Promise<void> {
     }, SHUTDOWN_TIMEOUT_MS);
     timeout.unref();
 
-    clearInterval(unknownCheck);
     await bridge.stop(); // no new caps are sent after this; any in flight finish
     if (source instanceof OdeMqttSource) await source.stop();
     await manager.close();

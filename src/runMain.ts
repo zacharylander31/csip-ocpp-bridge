@@ -4,7 +4,9 @@
 //  - a bad config stops it at start-up with exit code 2 and a clear message;
 //  - with a mock CSIP-AUS server (5 kW default, 3 kW control for 8 s) it caps
 //    a simulated charger 5000 -> 3000 -> 5000 W;
-//  - a charger that isn't in the config gets a warning;
+//  - a charger that isn't in the config is refused at the handshake (HTTP
+//    404) with a warning, and a configured charger's first connect isn't
+//    logged as a reconnect;
 //  - log lines have a timestamp, level and component;
 //  - on SIGTERM it exits 0 and leaves the last cap in place. Windows can't
 //    send SIGTERM, so there the same shutdown is triggered by an IPC message.
@@ -96,7 +98,14 @@ for (let i = 0; ; i++) {
         await sleep(250);
     }
 }
-await stranger.start();
+// A charger that isn't in the config must be refused at the handshake.
+// ocpp-rpc puts the HTTP status in `code` (the message is the status text).
+const strangerResult = await stranger.start().then(
+    () => 'connected' as const,
+    (err: Error & { code?: unknown }) => err,
+);
+if (strangerResult === 'connected') problems.push('unknown charger CPX was allowed to connect');
+else if (strangerResult.code !== 404) problems.push(`unknown charger CPX refused, but not with 404: ${strangerResult.code} ${strangerResult.message}`);
 
 // Watch what the charger draws.
 const powers: number[] = [];
@@ -111,7 +120,8 @@ console.log(`charger power changes (W): [${powers.join(', ')}]`);
 const seen = (powers[0] === 7400 ? powers.slice(1) : powers).join();
 if (seen !== '5000,3000,5000') problems.push(`power changes ${powers.join()}, expected (7400,)5000,3000,5000`);
 
-if (!output.some((l) => l.includes('charger "CPX" connected but is not in'))) problems.push('no warning for the unknown charger CPX');
+if (!output.some((l) => / WARN  .*REJECTED charger "CPX"/.test(l))) problems.push('no warning logged for refusing CPX');
+if (output.some((l) => l.includes('CP1 connected') && l.includes('reconnect'))) problems.push('first connect of CP1 logged as a reconnect');
 const logLine = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (DEBUG|INFO |WARN |ERROR) \[[^\]]+\] /;
 const unformatted = output.filter((l) => !logLine.test(l));
 if (unformatted.length > 0) problems.push(`log lines without timestamp/level/component: ${unformatted.slice(0, 3).join(' | ')}`);

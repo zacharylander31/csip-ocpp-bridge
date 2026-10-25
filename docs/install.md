@@ -89,7 +89,7 @@ ws://<the box's IP address>:9000/<charger id>
 - Protocol: OCPP **1.6J** or **2.0.1** (subprotocols `ocpp1.6` and `ocpp2.0.1`; 2.0.1 is chosen if a charger offers both). No TLS or OCPP security profiles yet, so keep the chargers and the box on a private network.
 - Port 9000 is `ocpp.port`. If you change it, change the `ports:` line in `docker-compose.yml` to match.
 - Settings that matter per charger (see [configuration.md](configuration.md#chargerdefaults-and-chargers)): `rateUnit` (does it take W or A), `phases`, `minAmpsPerPhase`, and for amps chargers `maxVoltage` (leave it at 253 V). A car stops charging below about 6 A per phase, so when a charger's share is below that, the bridge pauses it (0 W) instead of sending a limit the car can't use. On three-phase that's 4140 W.
-- A charger that connects with an id that isn't in the config is **not capped**, and the bridge logs a warning.
+- Only chargers listed in the config can connect. Any other id is **refused** (HTTP 404) and the bridge logs `REJECTED charger "<id>"` with the ids it expected. Ids are case-sensitive: copy the id exactly as the charger's OCPP settings show it.
 
 ### Check it works
 
