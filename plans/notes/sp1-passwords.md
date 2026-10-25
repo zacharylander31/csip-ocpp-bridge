@@ -1,6 +1,6 @@
 # OCPP Security Profile 1 (charger passwords)
 
-Branch `claude/ocpp-sp1-passwords-e030b9`, on top of `52d3c66` (unknown ids refused with 404). 26 Oct 2026, Claude.
+Branch `claude/ocpp-sp1-passwords-e030b9`, on top of `58ac9c3` (unknown ids refused with 404). 26 Oct 2026, Claude.
 
 ## What it does now
 

@@ -1,6 +1,6 @@
 # Tab C notes: runtime and packaging (23 Oct 2026)
 
-Branch `claude/tab-c-runtime-71d1a5`. Written by Claude; Zach reviews. Ports: 8110 (HTTP) and 9030–9031 (OCPP). Merged main at 6061339 (maxVoltage, SETTLE_MS) before finishing.
+Branch `claude/tab-c-runtime-71d1a5`. Written by Claude; Zach reviews. Ports: 8110 (HTTP) and 9030–9031 (OCPP). Merged main at 418ce64 (maxVoltage, SETTLE_MS) before finishing.
 
 ## What I built
 
@@ -23,7 +23,7 @@ Branch `claude/tab-c-runtime-71d1a5`. Written by Claude; Zach reviews. Ports: 81
 
 ## Results
 
-- `npm run typecheck` and `npm run build` pass. `config-test` 3/3, `runtime-demo` 3/3, after merging main 6061339.
+- `npm run typecheck` and `npm run build` pass. `config-test` 3/3, `runtime-demo` 3/3, after merging main 418ce64.
 - All 10 existing demos pass (demo, check-csip, bridge-demo, failsafe-demo, telemetry-demo, site-demo, ode-demo, ocpp16-demo, amps-demo, reconnect-demo), run one after another, before and after the merge.
 - **Manual check (the "done" criterion):** `npm run mock-csip` + `npm start -- --config config.example.mock-csip.json` + `npm run charger-sim -- --url ws://localhost:9030/CP1`: the charger went 5000 → 3000 (at the control, +10 s) → 5000 W (+40 s), bridge logs `SetChargingProfile ... Accepted` each time.
 - **Docker: not tested. Docker isn't installed on this machine** (and no WSL), so neither `docker compose config` nor `docker compose up` was run, and the image was never built. `npm run build` (what the Dockerfile runs) works. The compose file has not been checked by any YAML parser. **First thing to do on a machine with Docker:** `docker compose config`, `docker compose build`, then `docker compose run --rm bridge node dist/main.js --check`.
@@ -35,7 +35,7 @@ Branch `claude/tab-c-runtime-71d1a5`. Written by Claude; Zach reviews. Ports: 81
 2. **Strict validation.** Unknown keys are errors (a typo must not silently become a default). All problems are reported in one go. Ranges are sanity checks against typos (voltage 180–260, min amps 0–32, port 1–65535), not physics.
 3. **One place for each timeout.** With `ode-mqtt`, comms-lost time is `limitSource.commsLostAfterMs` (Tab A's option); `bridge.commsLostAfterMs` is rejected so there aren't two settings that fight. With `csip` it's `bridge.commsLostAfterMs` and must be longer than `pollMs`.
 4. **`fallbackImportLimitW` lives under `limitSource`** (it's an OdeMqttSource option) and is set in the example. Missing → a start-up warning explaining when it matters.
-5. **`maxVoltage` (from main's 6061339).** Exposed per charger and in `chargerDefaults`, default 253 V (AS 60038 top, so an amps cap stays within the share at any legal voltage); must be ≥ `voltage`. An amps charger with `maxVoltage` below 253 V gets a start-up warning, not an error (a site with a measured lower maximum may want it). `voltage` (230) now only decides the 6 A minimum for W chargers. My checks read the sim's own power, not readings after an ack, so `SETTLE_MS` isn't needed there.
+5. **`maxVoltage` (from main's 418ce64).** Exposed per charger and in `chargerDefaults`, default 253 V (AS 60038 top, so an amps cap stays within the share at any legal voltage); must be ≥ `voltage`. An amps charger with `maxVoltage` below 253 V gets a start-up warning, not an error (a site with a measured lower maximum may want it). `voltage` (230) now only decides the 6 A minimum for W chargers. My checks read the sim's own power, not readings after an ack, so `SETTLE_MS` isn't needed there.
 6. **Logging levels are guessed for other modules' messages.** Bridge/Manager/OdeMqttSource log plain strings; `logFn` makes lines with words like `fail`, `couldn't`, `COMMS LOST`, `offline`, `Rejected` into warnings. A heuristic, but all the messages are ours; a proper fix is a level-aware log option in those modules (see "outside my files").
 7. **Only warnings/errors are folded.** Info lines are state changes, and the same change coming back is news (an early version folded them too and hid `site limit 5000 W (default)` when a control ended).
 8. **Shutdown leaves caps in place.** Removing caps would let chargers draw full power while nothing enforces the network limit. On restart the bridge sends every charger its share on the first tick (its "applied" map starts empty). Cost: if the bridge is gone for good, chargers keep their last cap; the uninstall guide says to repoint chargers first.
