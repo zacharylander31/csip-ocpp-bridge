@@ -11,6 +11,8 @@ coverage/
 *.p12
 *.pfx
 config.local.*
+# ...except the public test certificates (see test-certs/README.md)
+!test-certs/*.pem
 
 # Personal experiments
 scratch/

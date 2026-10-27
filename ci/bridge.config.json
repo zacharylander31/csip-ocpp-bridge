@@ -1,0 +1,12 @@
+// CI only: the bridge in the Docker stack, driven by `npm run ode-live -- --compose`.
+{
+    "limitSource": {
+        "type": "ode-mqtt",
+        "url": "mqtt://mosquitto:1883",
+        "topic": "limits",
+        "fallbackImportLimitW": 1500
+    },
+    "ocpp": { "port": 9000 },
+    "chargers": [{ "id": "CP1" }],
+    "log": { "level": "info", "format": "text" }
+}

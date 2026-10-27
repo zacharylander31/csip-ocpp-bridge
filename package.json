@@ -20,7 +20,8 @@
     "charger-sim": "tsx src/runChargerSim.ts",
     "config-test": "tsx src/checkConfig.ts",
     "runtime-demo": "tsx src/runMain.ts",
-    "sp1-demo": "tsx src/runSp1.ts"
+    "sp1-demo": "tsx src/runSp1.ts",
+    "ode-live": "tsx src/runOdeLive.ts"
   },
   "license": "Apache-2.0",
   "type": "module",

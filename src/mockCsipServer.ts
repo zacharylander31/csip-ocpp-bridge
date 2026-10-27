@@ -1,6 +1,7 @@
 // Mock CSIP-AUS utility server (a small subset of IEEE 2030.5).
 //
-// Plain HTTP, no certificates, one pre-registered gateway, one DER program.
+// Plain HTTP by default, or HTTPS with a test certificate (Open Dynamic
+// Export only speaks HTTPS). One pre-registered gateway, one DER program.
 // XML shapes copy real responses (SA Power Networks, Energy Queensland)
 // captured in Open Dynamic Export's tests/sep2/mocks.
 //
@@ -17,7 +18,12 @@
 //   POST /mup                -> 201 + Location: /mup/N  (register a MirrorUsagePoint)
 //   GET  /mup/N              -> MirrorUsagePoint   (tells the gateway its postRate)
 //   POST /mup/N              -> 201                (one MirrorMeterReading)
+//
+// Responses (the gateway acknowledging a control):
+//   POST /rsps/1/rsp         -> 201                (logged, not checked)
+import crypto from 'node:crypto';
 import http from 'node:http';
+import https from 'node:https';
 import xml2js from 'xml2js';
 
 export interface ActivePower {
@@ -43,6 +49,10 @@ export interface Scenario {
     pollRateSec?: number;
     // How often the gateway should post telemetry (MirrorUsagePoint postRate).
     mupPostRateSec?: number;
+    // DefaultDERControl setGradW: ramp rate in hundredths of a percent per
+    // second (default 27, as SAPN sends). 0 = no ramping. Open Dynamic Export
+    // ramps every limit at this rate x its inverters' nameplate W.
+    setGradW?: number;
 }
 
 /** One telemetry reading the server received, for checking afterwards. */
@@ -64,13 +74,33 @@ export interface Mirror {
 
 const SEP = 'urn:ieee:std:2030.5:ns';
 const CSIPAUS = 'https://csipaus.org/ns';
-// The pre-registered gateway's certificate fingerprint.
-const GATEWAY_LFDI = '3E4F45AB31EDFE5B67E343E5E4562E31984E23E5';
+// The pre-registered gateway's certificate fingerprint, unless the
+// constructor is given another one.
+const DEFAULT_GATEWAY_LFDI = '3E4F45AB31EDFE5B67E343E5E4562E31984E23E5';
+
+export interface MockServerOptions {
+    log?: (msg: string) => void;
+    // Serve HTTPS with this certificate. The server doesn't ask for or check
+    // the client's certificate: the gateway is identified by gatewayLfdi.
+    tls?: { cert: string; key: string };
+    // LFDI of the pre-registered gateway (see lfdiOf()).
+    gatewayLfdi?: string;
+}
+
+/**
+ * IEEE 2030.5 LFDI of a certificate: the first 40 hex digits of the SHA-256
+ * of its DER encoding (the same as Open Dynamic Export works it out).
+ */
+export function lfdiOf(certPem: string): string {
+    return new crypto.X509Certificate(certPem).fingerprint256.replaceAll(':', '').slice(0, 40);
+}
 
 export class MockCsipServer {
-    private server: http.Server;
+    private server: http.Server | https.Server;
     private scenario: Scenario;
     private log: (msg: string) => void;
+    private gatewayLfdi: string;
+    private scheme: 'http' | 'https';
     private offline = false;
 
     // Telemetry state.
@@ -78,15 +108,20 @@ export class MockCsipServer {
     private mirrors = new Map<number, Mirror>(); // by N in /mup/N
     private nextMirrorId = 1;
 
-    constructor(scenario: Scenario, log: (msg: string) => void = (m) => console.log(`[CSIP] ${m}`)) {
+    constructor(scenario: Scenario, options: MockServerOptions | ((msg: string) => void) = {}) {
+        // A bare function is the log (how the older demos call it).
+        const opts = typeof options === 'function' ? { log: options } : options;
         this.scenario = scenario;
-        this.log = log;
-        this.server = http.createServer((req, res) => {
+        this.log = opts.log ?? ((m) => console.log(`[CSIP] ${m}`));
+        this.gatewayLfdi = (opts.gatewayLfdi ?? DEFAULT_GATEWAY_LFDI).toUpperCase();
+        const handler: http.RequestListener = (req, res) => {
             this.route(req, res).catch((err) => {
                 this.log(`error handling ${req.method} ${req.url}: ${(err as Error).message}`);
                 res.writeHead(500).end();
             });
-        });
+        };
+        this.scheme = opts.tls ? 'https' : 'http';
+        this.server = opts.tls ? https.createServer(opts.tls, handler) : http.createServer(handler);
     }
 
     setScenario(scenario: Scenario): void {
@@ -120,7 +155,7 @@ export class MockCsipServer {
     listen(port = 8080): Promise<void> {
         return new Promise((resolve) =>
             this.server.listen(port, () => {
-                this.log(`listening on http://localhost:${port}/dcap`);
+                this.log(`listening on ${this.scheme}://localhost:${port}/dcap`);
                 resolve();
             }),
         );
@@ -167,7 +202,7 @@ export class MockCsipServer {
         if (path === '/mup' && doc.MirrorUsagePoint) {
             const mup = doc.MirrorUsagePoint;
             // A gateway may only mirror itself.
-            if (mup.deviceLFDI !== GATEWAY_LFDI) return { status: 400 };
+            if (String(mup.deviceLFDI).toUpperCase() !== this.gatewayLfdi) return { status: 400 };
             // Posting an mRID the server already has updates that mirror
             // rather than making a second one, so it gets the same Location.
             for (const [id, m] of this.mirrors) {
@@ -181,6 +216,12 @@ export class MockCsipServer {
                 deviceLFDI: mup.deviceLFDI,
             });
             return { status: 201, location: `/mup/${id}` };
+        }
+
+        if (path === '/rsps/1/rsp' && doc.DERControlResponse) {
+            const r = doc.DERControlResponse;
+            this.log(`response to ${r.subject}: status ${r.status}`);
+            return { status: 201 };
         }
 
         const id = mirrorId(path);
@@ -205,11 +246,7 @@ export class MockCsipServer {
         const ns = `xmlns="${SEP}" xmlns:${p}="${CSIPAUS}"`;
         const pollRate = this.scenario.pollRateSec ?? 60;
 
-        const id = mirrorId(path);
-        if (id !== undefined) {
-            const m = this.mirrors.get(id);
-            if (!m) return undefined;
-            return `<MirrorUsagePoint ${ns} href="${path}">
+        const mirrorXml = (href: string, m: Mirror, attrs = '') => `<MirrorUsagePoint${attrs} href="${href}">
     <mRID>${m.mRID}</mRID>
     <description>${m.description}</description>
     <roleFlags>${m.roleFlags}</roleFlags>
@@ -218,9 +255,22 @@ export class MockCsipServer {
     <deviceLFDI>${m.deviceLFDI}</deviceLFDI>
     <postRate>${this.scenario.mupPostRateSec ?? 300}</postRate>
 </MirrorUsagePoint>`;
+
+        const id = mirrorId(path);
+        if (id !== undefined) {
+            const m = this.mirrors.get(id);
+            return m ? mirrorXml(path, m, ` ${ns}`) : undefined;
         }
 
         switch (path) {
+            // Open Dynamic Export reads the list to find mirrors it made before.
+            case '/mup': {
+                const items = [...this.registeredMirrors()].map(([href, m]) => mirrorXml(href, m));
+                return `<MirrorUsagePointList ${ns} href="/mup" pollRate="${pollRate}" all="${items.length}" results="${items.length}" subscribable="0">
+${items.join('\n')}
+</MirrorUsagePointList>`;
+            }
+
             case '/dcap':
                 return `<DeviceCapability ${ns} href="/dcap" pollRate="${pollRate}">
     <TimeLink href="/tm"/>
@@ -245,7 +295,7 @@ export class MockCsipServer {
                 return `<EndDeviceList ${ns} href="/edev" all="1" results="1" subscribable="0">
     <EndDevice href="/edev/1" subscribable="0">
         <FunctionSetAssignmentsListLink all="1" href="/edev/1/fsa"/>
-        <lFDI>${GATEWAY_LFDI}</lFDI>
+        <lFDI>${this.gatewayLfdi}</lFDI>
         <sFDI>167261211391</sFDI>
         <changedTime>${this.serverNow()}</changedTime>
         <enabled>true</enabled>
@@ -285,7 +335,7 @@ export class MockCsipServer {
     <DERControlBase>
         ${activePower(p, 'opModImpLimW', d)}
     </DERControlBase>
-    <setGradW>27</setGradW>
+    <setGradW>${this.scenario.setGradW ?? 27}</setGradW>
 </DefaultDERControl>`;
             }
 

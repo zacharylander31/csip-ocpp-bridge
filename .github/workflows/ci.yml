@@ -72,7 +72,7 @@ jobs:
   # is the only place the Docker files get checked (ubuntu-latest has Docker).
   docker:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -93,3 +93,44 @@ jobs:
       - name: Image validates the example config
         # Same mount as docker-compose.yml; BRIDGE_CONFIG in the image points at it.
         run: docker run --rm -v "$PWD/config.json:/config/config.json:ro" csip-ocpp-bridge:ci node dist/main.js --check
+
+      # The real stack: `docker compose up` with the real ODE image, against
+      # the mock CSIP-AUS server on the runner (src/runOdeLive.ts).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Prepare the stack's config (CI files, public test certificates)
+        run: |
+          cp ci/bridge.config.json config.json
+          mkdir -p ode/config ode/logs
+          cp ci/ode.config.json ode/config/config.json
+          cp test-certs/ode-device.cert.pem ode/config/cert.pem
+          cp test-certs/ode-device.key.pem ode/config/key.pem
+
+      - name: docker compose build and pull
+        run: |
+          docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml build
+          docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml pull mosquitto open-dynamic-export
+
+      - name: ode-live (docker compose up, real ODE, network -> charger)
+        timeout-minutes: 6
+        # The mock server must be up before ODE starts: ODE retries a failed
+        # first poll only after minutes. So the check starts first, in the
+        # background, then the stack.
+        run: |
+          npm run ode-live -- --compose &
+          check=$!
+          sleep 3
+          docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d
+          wait $check
+
+      - name: Stack logs
+        if: always()
+        run: |
+          docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml ps
+          docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml logs --no-color --tail 150
+          docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml down

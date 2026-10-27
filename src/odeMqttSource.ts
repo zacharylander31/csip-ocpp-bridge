@@ -22,9 +22,13 @@
 // schedules, which tell us whether a control is active.
 //
 // The default: ODE doesn't publish the default control on its own, so we
-// learn it. Whenever no control is anywhere near active, the limit ODE sends
-// *is* the default (or ODE's fixedDefault), so we remember it. If we never
-// saw one (e.g. we started mid-control), `fallbackImportLimitW` is used.
+// learn it. Whenever no control is anywhere near active and the limit has
+// held still for a few seconds, the limit ODE sends *is* the default (or
+// ODE's fixedDefault), so we remember it. "Held still" because ODE ramps
+// between limits (setGradW x the inverter's nameplate W per second, or over
+// a control's rampTms), which can take minutes; a value seen mid-ramp isn't
+// the default. If we never saw one (e.g. we started mid-control),
+// `fallbackImportLimitW` is used.
 //
 // Fail-safe: the bridge does it, as for CsipClient. We set lastUpdatedAt on
 // every valid message; if none arrives for commsLostAfterMs (ODE crashed,
@@ -64,6 +68,9 @@ const FIRST_MESSAGE_WAIT_MS = 3000;
 // time. Near a boundary ODE's clock and ours may disagree, and ODE may still
 // be ramping between the control and the default.
 const DEFAULT_LEARN_MARGIN_MS = 5000;
+// ...and only once the same limit has arrived for this long (ODE publishes
+// about once a second), so a value seen while ODE is ramping isn't learnt.
+const DEFAULT_STABLE_MS = 5000;
 // Log at most one "bad message" line this often, so a broken publisher
 // can't flood the log.
 const BAD_MESSAGE_LOG_EVERY_MS = 30_000;
@@ -79,6 +86,8 @@ export class OdeMqttSource implements LimitSource {
     private lastError?: string; // ditto, so retries don't repeat the same error
     private latest?: ActiveLimit; // from the last valid message
     private learnedDefault?: { importLimitW: number | undefined };
+    // The limit we may learn as the default once it has held for DEFAULT_STABLE_MS.
+    private defaultCandidate?: { importLimitW: number | undefined; since: number };
     private lastBadLogAt = 0;
     private badSinceLastLog = 0;
     private log: (msg: string) => void;
@@ -189,7 +198,12 @@ export class OdeMqttSource implements LimitSource {
         const nearControl = msg.importControls.some(
             (c) => c.start - DEFAULT_LEARN_MARGIN_MS <= now && now < c.end + DEFAULT_LEARN_MARGIN_MS,
         );
-        if (!nearControl) {
+        const candidate = this.defaultCandidate;
+        if (nearControl) {
+            this.defaultCandidate = undefined;
+        } else if (!candidate || candidate.importLimitW !== msg.importLimitW) {
+            this.defaultCandidate = { importLimitW: msg.importLimitW, since: now };
+        } else if (now - candidate.since >= DEFAULT_STABLE_MS) {
             if (!this.learnedDefault || this.learnedDefault.importLimitW !== msg.importLimitW) {
                 this.log(`default import limit is ${msg.importLimitW === undefined ? 'none' : `${msg.importLimitW} W`}`);
             }

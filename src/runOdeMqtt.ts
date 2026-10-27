@@ -4,13 +4,15 @@
 // publishes ODE-shaped messages every second, as real ODE does. Timeline
 // (seconds from the first message):
 //    0  default 5 kW                          -> 2500 W each
-//    8  control EVENING-PEAK 3 kW until 34    -> 1500 W each
-//   10  bad messages mixed in (must be ignored)
-//   14  only bad messages from now on (must not count as "alive")
-//   18  broker goes down
-//  ~19  comms lost (5 s without a valid message) -> fail-safe default, 2500 W each
-//   22  broker back up; 23 valid messages again  -> 1500 W each (control still on)
-//   34  control ends                          -> 2500 W each
+//       (learnt as the default once it has held for 5 s)
+//   14  control EVENING-PEAK 3 kW until 40    -> 1500 W each
+//   16  bad messages mixed in (must be ignored)
+//   20  only bad messages from now on (must not count as "alive")
+//   24  broker goes down
+//  ~25  comms lost (5 s without a valid message) -> fail-safe default, 2500 W each
+//   28  broker back up; 29 valid messages again  -> 1500 W each (control still on)
+//   40  control ends                          -> 2500 W each
+// Then, without a broker: a value seen while ODE ramps isn't learnt as the default.
 // Exits non-zero on failure.
 import net from 'node:net';
 import { Aedes } from 'aedes';
@@ -26,14 +28,14 @@ const EV_MAX_W = 7400;
 const CHARGER_IDS = ['CP1', 'CP2'];
 const TOPIC = 'limits'; // ODE's publish.mqtt.topic; the csipAus data goes to limits/csipAus
 
-const CONTROL = { mRID: 'EVENING-PEAK', fromSec: 8, toSec: 34, importLimitW: 3000 };
+const CONTROL = { mRID: 'EVENING-PEAK', fromSec: 14, toSec: 40, importLimitW: 3000 };
 const DEFAULT_IMPORT_W = 5000;
-const BAD_MIXED_IN_FROM_SEC = 10;
-const VALID_STOPS_AT_SEC = 14;
-const BROKER_DOWN_AT_SEC = 18;
-const BROKER_UP_AT_SEC = 22;
-const VALID_RESUMES_AT_SEC = 23;
-const END_AT_SEC = 40;
+const BAD_MIXED_IN_FROM_SEC = 16;
+const VALID_STOPS_AT_SEC = 20;
+const BROKER_DOWN_AT_SEC = 24;
+const BROKER_UP_AT_SEC = 28;
+const VALID_RESUMES_AT_SEC = 29;
+const END_AT_SEC = 46;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -210,6 +212,18 @@ async function main() {
     }
     console.log(`bad messages ignored: ${source.rejectedMessages}`);
     if (source.rejectedMessages === 0) problems.push('no bad messages were rejected (were any sent?)');
+
+    // Ramps (seen with real ODE): after the default has held, ODE ramps
+    // down 13.5 W a second (setGradW 27 x a 5 kW inverter). None of those
+    // values may become the default, or a comms loss mid-ramp would fall
+    // back to a number the network never sent.
+    const ramp = new OdeMqttSource({ url: 'mqtt://unused', topic: TOPIC, log: () => {} });
+    const message = (w: number) => JSON.stringify({ limit: { source: 'csipAus', opModImpLimW: w }, schedules: { opModImpLimW: [] } });
+    for (let s = 0; s <= 6; s++) ramp.onMessage(message(DEFAULT_IMPORT_W), t0 + s * 1000);
+    for (let s = 1; s <= 60; s++) ramp.onMessage(message(DEFAULT_IMPORT_W - 13.5 * s), t0 + (6 + s) * 1000);
+    const learnt = ramp.defaultImportLimit().importLimitW;
+    console.log(`default after a 60 s ramp: ${learnt} W`);
+    if (learnt !== DEFAULT_IMPORT_W) problems.push(`a value seen mid-ramp was learnt as the default: ${learnt} W`);
 
     console.log(problems.length === 0
         ? 'RESULT: PASS - followed ODE, ignored bad messages, fell back to the default when ODE went silent, and recovered'

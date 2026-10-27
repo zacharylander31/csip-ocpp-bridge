@@ -1,0 +1,13 @@
+# CI only: lets `npm run ode-live -- --compose` drive the real stack from the
+# runner. Used as: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up
+services:
+    open-dynamic-export:
+        # The mock CSIP-AUS server runs on the runner, outside Docker.
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+
+    mosquitto:
+        # The fake inverter and meter publish from the runner. Never do this
+        # on a real site without a broker password (see mosquitto.conf).
+        ports:
+            - '1883:1883'

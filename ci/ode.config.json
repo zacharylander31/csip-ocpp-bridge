@@ -1,0 +1,13 @@
+{
+    "setpoints": {
+        "csipAus": {
+            "host": "https://host.docker.internal:8130",
+            "dcapUri": "/dcap",
+            "fixedDefault": { "exportLimitWatts": 1500, "importLimitWatts": 1500 }
+        }
+    },
+    "inverters": [{ "type": "mqtt", "host": "mqtt://mosquitto:1883", "topic": "fake/inverter" }],
+    "inverterControl": { "enabled": false },
+    "meter": { "type": "mqtt", "host": "mqtt://mosquitto:1883", "topic": "fake/meter" },
+    "publish": { "mqtt": { "host": "mqtt://mosquitto:1883", "topic": "limits" } }
+}
