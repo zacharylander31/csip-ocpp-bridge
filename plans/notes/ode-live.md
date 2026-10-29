@@ -7,7 +7,7 @@ Goal: prove the chain with the **real** Open Dynamic Export, not our fake one:
 ## What was built
 
 - `npm run ode-live -- --ode-dir <ODE checkout>` (`src/runOdeLive.ts`, ports 8130 HTTPS mock, 8131 MQTT, 8132 ODE, 9050 OCPP): runs everything as processes on one machine. **PASS 3/3** on Windows against ODE `v0.20.0` from source.
-- `npm run ode-live -- --compose`: the same check against the Docker stack (`docker-compose.yml` + `ci/docker-compose.ci.yml`). Runs in CI (docker job). **Not run yet**: this PC has no Docker (virtualization off in BIOS, no WSL), so the first proof is the first CI run after pushing.
+- `npm run ode-live -- --compose`: the same check against the Docker stack (`docker-compose.yml` + `ci/docker-compose.ci.yml`). Runs in CI (docker job). **PASS on the first CI run (40831681088, 29 Oct 2026)**: 5000 → 3000 → 5000 W, 57 telemetry readings. This PC has no Docker (virtualization off in BIOS, no WSL).
 - Mock server (`src/mockCsipServer.ts`): optional HTTPS (`tls`), configurable gateway LFDI (`gatewayLfdi`, `lfdiOf(certPem)`), `GET /mup` (MirrorUsagePointList, ODE reads it), `POST /rsps/1/rsp` (DERControlResponse, ODE sends them), `setGradW` scenario option (default 27). Old callers unchanged.
 - `npm run mock-csip` gained `--port --https --gateway-cert --control-in --control-for`.
 - `test-certs/`: public self-signed TEST certs (ODE device + mock server). `.gitignore` has an exception for them only.
@@ -25,7 +25,6 @@ What the check asserts: charger capped at the 5 kW default; a 3 kW control the n
 
 ## TODO / open
 
-- First CI run of the compose job (needs a push).
 - The mock reads only each reading's value and period. ODE posts many reading kinds, so the demo shows just one example value.
 - arm64 (Pi) image still untested.
 - ODE clone in the scratchpad is checked out at `v0.20.0`. The #139 fix is on its branch `fix/mirror-reading-time-period` (and in `upstream/`).
