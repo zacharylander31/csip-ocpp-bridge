@@ -10,6 +10,9 @@
 // - `evMinAmpsPerPhase`: a real car stops charging below ~6 A per phase.
 // - `reboot()`: drops the connection, forgets every profile, boots again.
 // - `reconnect()`: drops the connection only (Wi-Fi blip): profiles kept, no boot.
+// - `autoReconnect: true`: if the bridge goes away (restart, crash), keep
+//   retrying with backoff and carry on charging when it's back, like a real
+//   charger. Off by default so demos control every drop themselves.
 import { RPCClient } from 'ocpp-rpc';
 
 export type OcppVersion = '1.6' | '2.0.1';
@@ -25,6 +28,7 @@ export interface SimChargerOptions {
     evMinAmpsPerPhase?: number; // below this the car stops (default 0 = never stops)
     meterIntervalMs?: number;
     password?: string; // OCPP Security Profile 1: sent with HTTP Basic auth (username = id)
+    autoReconnect?: boolean; // default false: see the header comment
     log?: (msg: string) => void;
 }
 
@@ -47,6 +51,7 @@ export class SimCharger {
     private meterIntervalMs: number;
     private endpoint: string;
     private password?: string;
+    private autoReconnect: boolean;
     private log: (msg: string) => void;
 
     private client!: RPCClient;
@@ -58,6 +63,7 @@ export class SimCharger {
     private transactionId = `tx-${Date.now()}`; // 2.0.1: chosen by the charger
     private transactionId16?: number; // 1.6: chosen by the CSMS in StartTransaction
     private meterTimer?: NodeJS.Timeout;
+    private closing = false; // our own disconnect(), not a lost link
 
     constructor(opts: SimChargerOptions) {
         this.id = opts.id;
@@ -70,6 +76,7 @@ export class SimCharger {
         this.evMinAmpsPerPhase = opts.evMinAmpsPerPhase ?? 0;
         this.meterIntervalMs = opts.meterIntervalMs ?? 1000;
         this.password = opts.password;
+        this.autoReconnect = opts.autoReconnect ?? false;
         this.log = opts.log ?? ((m) => console.log(`[${this.id}] ${m}`));
     }
 
@@ -110,10 +117,16 @@ export class SimCharger {
 
     private async disconnect(): Promise<void> {
         clearInterval(this.meterTimer);
-        await this.client.close({ awaitPending: true });
+        this.closing = true;
+        try {
+            await this.client.close({ awaitPending: true });
+        } finally {
+            this.closing = false;
+        }
     }
 
     private startMeterTimer(): void {
+        clearInterval(this.meterTimer); // never two timers
         this.meterTimer = setInterval(() => {
             this.sendMeterValues().catch((err) => this.log(`meter values not sent: ${(err as Error).message}`));
         }, this.meterIntervalMs);
@@ -127,7 +140,11 @@ export class SimCharger {
             identity: this.id, // becomes the URL path: ws://host:9000/<id>
             protocols: [this.protocol === '1.6' ? 'ocpp1.6' : 'ocpp2.0.1'],
             strictMode: true, // validate every message against the OCPP JSON schemas
-            reconnect: false, // reconnect()/reboot() decide when to come back
+            // Off: reconnect()/reboot() decide when to come back. On: ocpp-rpc
+            // retries after an unexpected drop with exponential backoff (1 s,
+            // 2 s, 4 s ... up to 10 s, +/-25% jitter). Our own close() never
+            // triggers it.
+            reconnect: this.autoReconnect,
             // ocpp-rpc sends "Authorization: Basic base64(<id>:<password>)" on connect.
             // A refused connect rejects with err.code = the HTTP status (401, 404).
             ...(this.password !== undefined && { password: this.password }),
@@ -148,7 +165,28 @@ export class SimCharger {
             return { status: existed ? 'Accepted' : 'Unknown' };
         });
 
+        if (this.autoReconnect) this.watchConnection(this.client);
         await this.client.connect();
+    }
+
+    // Auto-reconnect: meter values pause while the link is down (calls would
+    // only fail), and resume when it's back. Profiles and the transaction are
+    // kept and there's no new BootNotification: the charger didn't restart,
+    // the bridge did. The bridge re-sends its cap after `bootWaitMs` anyway.
+    private watchConnection(client: RPCClient): void {
+        let opened = false;
+        client.on('disconnect', ({ code }: { code: number }) => {
+            if (this.closing || client !== this.client) return; // we closed it ourselves
+            clearInterval(this.meterTimer);
+            this.log(`connection lost (code ${code}), reconnecting with backoff (profiles kept)`);
+        });
+        client.on('open', () => {
+            if (opened && client === this.client) {
+                this.log(`reconnected -> drawing ${this.currentPowerW()} W`);
+                this.startMeterTimer();
+            }
+            opened = true;
+        });
     }
 
     // Same message name in both versions, different shapes:

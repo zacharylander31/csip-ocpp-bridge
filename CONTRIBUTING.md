@@ -10,7 +10,7 @@ Thanks for looking. The most useful contributions right now:
 ```bash
 npm ci
 npm run typecheck
-npm run demo
+npm run showcase
 ```
 
 Then run the other demos in [docs/testing.md](docs/testing.md), or let CI run them. CI must pass.
@@ -22,7 +22,7 @@ Then run the other demos in [docs/testing.md](docs/testing.md), or let CI run th
 
 ## Security problems
 
-If you find something that could let someone control chargers or a site's power without permission, please don't open a public issue. Contact the maintainer privately first. *(TODO: add a security contact before the public release.)*
+If you find something that could let someone control chargers or a site's power without permission, please don't open a public issue. Report it privately through GitHub's private vulnerability reporting, as described in [SECURITY.md](SECURITY.md).
 
 ## Licence
 

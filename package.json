@@ -21,7 +21,10 @@
     "config-test": "tsx src/checkConfig.ts",
     "runtime-demo": "tsx src/runMain.ts",
     "sp1-demo": "tsx src/runSp1.ts",
-    "ode-live": "tsx src/runOdeLive.ts"
+    "ode-live": "tsx src/runOdeLive.ts",
+    "sim-reconnect-demo": "tsx src/runSimReconnect.ts",
+    "showcase": "tsx src/runShowcase.ts",
+    "demo-animation": "tsx src/makeDemoAnimation.ts"
   },
   "license": "Apache-2.0",
   "type": "module",

@@ -67,6 +67,13 @@ jobs:
       - name: sp1-demo (charger passwords, OCPP Security Profile 1)
         run: npm run sp1-demo
         timeout-minutes: 3
+      - name: sim-reconnect-demo (simulated charger survives a bridge restart)
+        run: npm run sim-reconnect-demo
+        timeout-minutes: 3
+      # The README's demo: mock network + src/main.ts + one charger, ~60 s.
+      - name: showcase (the README demo, network -> bridge -> charger)
+        run: npm run showcase
+        timeout-minutes: 4
 
   # Separate job: a Docker problem shouldn't hide the demo results, and this
   # is the only place the Docker files get checked (ubuntu-latest has Docker).

@@ -4,8 +4,9 @@
 
 The bridge takes the import limit that an electricity network sends a site over CSIP-AUS (for example "this site may import at most 3 kW from 5 to 7 pm") and caps the site's EV chargers over OCPP, the protocol chargers already speak.
 
-<!-- TODO(week 6): replace with the demo GIF (see docs/recording-script.md) -->
-> 🎬 *Demo recording coming soon: network sets 3 kW → charger drops to 3 kW → limit ends → charger recovers.*
+![npm run showcase: the network sets a 3 kW limit, the charger drops from 5000 W to 3000 W, and goes back to 5000 W when the limit ends](docs/showcase.svg)
+
+*A real run of `npm run showcase`, with the quiet stretches shortened (the clock on each line shows the real times). Mock network, the real bridge program, a simulated charger. Asciinema version: [`docs/showcase.cast`](docs/showcase.cast).*
 
 ## The problem
 
@@ -27,61 +28,64 @@ flowchart LR
 ```
 
 1. The network publishes controls (import limit, start time, duration) and a **default control** for when nothing else applies or comms are lost.
-2. A CSIP-AUS client polls the network and works out the limit active right now. In production that client is [Open Dynamic Export](https://github.com/longzheng/open-dynamic-export) (ODE), which already handles TLS, certificates and network certification. This repo also has a small client of its own, used with a mock server for demos and testing.
-3. The bridge subtracts the house load (from a site meter), splits what is left between the chargers, and sends each one an OCPP `SetChargingProfile` (`ChargingStationMaxProfile`, in watts).
-4. Chargers report what they actually draw, and the bridge posts that back to the network as telemetry.
-5. If the network link drops, the bridge falls back to the default control.
+2. A CSIP-AUS client polls the network and works out the limit active right now. On a real site that client is [Open Dynamic Export](https://github.com/longzheng/open-dynamic-export) (ODE), which already handles TLS, certificates and network certification, and publishes the active limit over MQTT. This repo also has a small client of its own, used with a mock server for demos and testing.
+3. The bridge splits the limit between the chargers (after subtracting the house load, if it has a site meter) and sends each one an OCPP `SetChargingProfile` (`ChargingStationMaxProfile`, in watts or amps).
+4. If the limit stops arriving, the bridge falls back to the network's default control.
 
 More detail: [docs/architecture.md](docs/architecture.md).
 
 ## Quick start
 
-Needs Node 24.
+Needs Node 24. No Docker, hardware or network account.
 
 ```bash
+git clone https://github.com/zacharylander31/csip-ocpp-bridge.git
+cd csip-ocpp-bridge
 npm ci
 ```
 
 ```bash
-npm run bridge-demo
+npm run showcase
 ```
 
-This starts a mock CSIP-AUS server, the bridge and two simulated OCPP 2.0.1 chargers on your machine. The site limit goes 5 kW → 3 kW for 8 s → 5 kW, and each charger follows: 2500 W → 1500 W → 2500 W. It prints `PASS` or `FAIL` and exits non-zero on failure.
+About a minute, in one terminal: a mock CSIP-AUS network, the real bridge program (`src/main.ts`, the same thing `npm start` and Docker run) and a simulated OCPP 2.0.1 charger. The network's default is 5 kW, then it sets 3 kW for 30 s; the charger follows 5000 → 3000 → 5000 W. It checks the result and exits non-zero if the charger didn't follow.
 
-Every demo and what it proves: [docs/testing.md](docs/testing.md). Installing next to ODE on real hardware: [docs/install.md](docs/install.md) (in progress for v0.1).
+Every other demo and what it proves: [docs/testing.md](docs/testing.md). Running it next to ODE on a site: [docs/install.md](docs/install.md). Every config option: [docs/configuration.md](docs/configuration.md).
 
 ## What works today
 
-All of this runs against simulated chargers and a mock CSIP-AUS server:
+Proven by automated checks that run in CI on every push, all against **simulated** chargers and a **mock** CSIP-AUS server:
 
-- CSIP-AUS client: discovers resources from `/dcap`, polls, and picks the active control on the server's clock, else the default control.
-- Import limit → OCPP 2.0.1 charging profile, split equally across several chargers.
-- Site meter: chargers get `limit − house load`, so a kettle or solar export changes their share.
-- Fail-safe: no good poll for 3 poll intervals → apply the default control; resume the schedule when the link returns.
-- Telemetry back to the network (MirrorUsagePoint / MirrorMeterReading), with failed posts kept and resent in order.
+- **With the real Open Dynamic Export.** `docker compose up` runs the bridge, mosquitto and the real ODE `v0.20.0` image; ODE talks HTTPS with certificates to the mock network, and the charger follows 5000 → 3000 → 5000 W.
+- **OCPP 1.6J and 2.0.1** chargers on the same bridge; caps in watts or amps; single or three phase; below ~6 A per phase the charger is paused instead of given a current the car can't use. Amps are worked out at 253 V, so a high supply voltage can't push the real draw over the share.
+- **Several chargers** share the site limit equally. With a site meter, chargers get `limit − house load`.
+- **Fail-safe:** no fresh limit for a set time (ODE silent, broker down, network unreachable) → the network's default control.
+- **Chargers that reboot or reconnect** get their cap re-sent.
+- **Only configured chargers** may connect: unknown ids are refused at the handshake (HTTP 404). **Per-charger passwords** (OCPP Security Profile 1, HTTP Basic auth) are optional per charger; a missing or wrong one is refused (HTTP 401). Passwords come from environment variables, never the config file, and never appear in logs.
+- **Runs as a service:** one JSON config file, checked strictly at start-up; text or JSON logs; clean shutdown that leaves the caps in place.
+- The bridge's own CSIP-AUS client (for the mock server) also posts telemetry back (MirrorUsagePoint / MirrorMeterReading).
 
 ## What doesn't work yet
 
 Being honest about the limits:
 
-- **No certificates of our own.** Our CSIP-AUS client talks plain HTTP to a mock server. For real networks the plan is to run behind ODE, which does TLS and certificates.
-- **Not tested with any real network's server.** Networks implement CSIP-AUS differently (QLD and SA differ, for example), and comms-loss rules and timeouts still need checking network by network.
-- **Not tested with real chargers yet.** Only simulated OCPP 2.0.1 chargers so far. OCPP 1.6J, limits in amps and three-phase are in progress for v0.1.
-- **No V2G.** One-way chargers only. Two-way charging comes later.
-- **Single site.** One bridge manages one site.
-- **No real site meter yet.** The site meter is simulated.
-
-## v0.1 (in progress)
-
-Goal: runs next to Open Dynamic Export on a Raspberry Pi-class box, takes ODE's active import limit over MQTT, caps one or more real OCPP chargers (1.6J and 2.0.1), fails safe, and installs with `docker compose up` plus one config file.
+- **Not tested with a real network's server.** Only with our mock. Networks implement CSIP-AUS differently (QLD and SA differ), and comms-loss rules and timeouts still need checking network by network.
+- **Not tested with a real charger.** Every charger so far is our simulator. Real firmware will have quirks.
+- **No TLS between charger and bridge** (OCPP Security Profile 2). Passwords cross the local network in plain text, and a charger without a password can be impersonated by a device that knows its id.
+- **No V2G.** One-way chargers only.
+- **ODE ramps import limits slowly.** ODE ramps every limit change at the network's `setGradW` × the *solar inverter's* nameplate. With SA Power Networks' setting and a 5 kW inverter, 5 kW → 3 kW takes about 2.5 minutes, so a short control barely moves the charger. We think that ramp shouldn't apply to an EV import limit and plan to raise it with ODE.
+- **ODE doesn't fail safe on its own** when it loses the network: it keeps following its cached schedule. The bridge's fail-safe only covers ODE going silent.
+- **No real site meter yet** (simulated only), so on a real site each charger gets an equal share of the whole site limit, with nothing subtracted for the house.
+- **arm64 (Raspberry Pi) image** not built or tested yet; CI only covers amd64.
+- **Single site.** One bridge manages one site. A paused charger's share isn't given to the others.
 
 ## Relationship to Open Dynamic Export
 
-[Open Dynamic Export](https://github.com/longzheng/open-dynamic-export) is a free, open-source (MIT) CSIP-AUS gateway client by Long Zheng. It controls solar inverters, has no OCPP or EV charger support, and is certified with SA Power Networks ([opendynamicexport.com](https://opendynamicexport.com/csip-aus/)). ODE already publishes the active limit over MQTT, so this bridge is designed to sit **next to** it: ODE talks to the network, the bridge talks to the chargers. This is an independent project, not part of ODE, and we'd like to contribute EV charger support upstream where that makes sense.
+[Open Dynamic Export](https://github.com/longzheng/open-dynamic-export) is a free, open-source (MIT) CSIP-AUS gateway client by Long Zheng. It controls solar inverters, has no OCPP or EV charger support, and is certified with SA Power Networks ([opendynamicexport.com](https://opendynamicexport.com/csip-aus/)). This bridge is designed to sit **next to** it: ODE talks to the network, the bridge talks to the chargers. This is an independent project, not part of ODE, and we'd like to contribute EV charger support upstream where that makes sense.
 
-## Contributing
+## Contributing and security
 
-Bug reports from real chargers and networks are the most useful thing right now. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Reports from real chargers and networks are the most useful thing right now. See [CONTRIBUTING.md](CONTRIBUTING.md). Found a security problem? Please report it privately: [SECURITY.md](SECURITY.md).
 
 ## Licence
 
