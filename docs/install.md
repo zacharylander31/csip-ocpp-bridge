@@ -1,19 +1,19 @@
 # Install guide
 
-> **Status: v0.1 in progress.** Docker Compose install and `npm start` work, but the bridge has only been run against simulated chargers and a fake ODE, not real hardware. Treat a real install as a trial.
+> **Status: v0.1, not tagged yet.** The full Docker Compose stack (bridge + mosquitto + the real ODE `v0.20.0` image) passes in CI against a mock CSIP-AUS server and a simulated charger. It has **not** run against a real network's server or a real charger, and the arm64 (Raspberry Pi) image hasn't been built or tested. Treat a real install as a trial and watch it.
 
 ## Run the demos (no hardware)
 
 Needs Node 24 and npm.
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/zacharylander31/csip-ocpp-bridge.git
 cd csip-ocpp-bridge
 npm ci
-npm run bridge-demo
+npm run showcase
 ```
 
-Everything runs on your machine: a mock CSIP-AUS server, the bridge and simulated chargers. No hardware, network account or certificates needed. See [testing.md](testing.md) for the other demos.
+Everything runs on your machine in about a minute: a mock CSIP-AUS server, the bridge and a simulated charger. No hardware, network account or certificates needed. See [testing.md](testing.md) for the other demos.
 
 ### Run the real program against the mock server
 
@@ -31,7 +31,7 @@ npm start -- --config config.example.mock-csip.json
 npm run charger-sim -- --url ws://localhost:9030/CP1
 ```
 
-The mock serves a 5 kW default, then a 3 kW control from 10 s to 40 s after it starts. The charger terminal shows `drawing 5000 W` → `drawing 3000 W` → `drawing 5000 W`. `charger-sim` options (OCPP 1.6, three-phase, amps-only) are listed at the top of [`src/runChargerSim.ts`](../src/runChargerSim.ts).
+The mock serves a 5 kW default, then a 3 kW control from 10 s to 40 s after it starts. The charger terminal shows `drawing 5000 W` → `drawing 3000 W` → `drawing 5000 W`. You can stop and restart the bridge: the simulated charger keeps its cap and reconnects by itself. `charger-sim` options (OCPP 1.6, three-phase, amps-only) are listed at the top of [`src/runChargerSim.ts`](../src/runChargerSim.ts).
 
 ## Run on a site box with Open Dynamic Export (v0.1)
 
@@ -53,7 +53,7 @@ The mock serves a 5 kW default, then a 3 kW control from 10 s to 40 s after it s
 
 1. Get the code:
    ```bash
-   git clone <repo-url>
+   git clone https://github.com/zacharylander31/csip-ocpp-bridge.git
    cd csip-ocpp-bridge
    ```
 2. Configure the bridge: copy the example and edit it (at least `chargers`, and `fallbackImportLimitW`). Every option is in [configuration.md](configuration.md).

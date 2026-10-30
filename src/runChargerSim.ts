@@ -14,11 +14,13 @@
 //   --password <password>      OCPP Security Profile 1 password (HTTP Basic auth).
 //                              Visible in your shell history and process list:
 //                              fine for a test password, not a real one.
+//   --no-reconnect             stay offline (no exit) if the bridge goes away
+//                              (default: reconnect with backoff, 1 s up to 10 s)
 //
 // It waits for the bridge if it isn't up yet. Ctrl+C stops it. If the bridge
-// refuses it (wrong/missing password: 401, unknown id: 404) it says why and exits.
-// Limitation: if the bridge restarts, the sim doesn't reconnect by itself
-// (SimCharger has no auto-reconnect); restart the sim too.
+// refuses it at the first connect (wrong/missing password: 401, unknown id:
+// 404) it says why and exits. If the bridge restarts later, the sim keeps its
+// caps and reconnects by itself, so you can restart `npm start` freely.
 
 import { parseArgs } from 'node:util';
 import { SimCharger } from './chargerSim.js';
@@ -37,6 +39,7 @@ const { values } = parseArgs({
         'max-w': { type: 'string', default: '7400' },
         'min-amps': { type: 'string', default: '0' },
         password: { type: 'string' },
+        'no-reconnect': { type: 'boolean', default: false },
     },
 });
 
@@ -73,6 +76,7 @@ const sim = new SimCharger({
     evMaxW: number('max-w', values['max-w']),
     evMinAmpsPerPhase: number('min-amps', values['min-amps']),
     password: values.password,
+    autoReconnect: !values['no-reconnect'],
     log: (m) => log.info(m),
 });
 

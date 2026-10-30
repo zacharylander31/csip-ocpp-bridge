@@ -2,55 +2,40 @@
 
 The story in one line: **the network sets 3 kW → the charger drops to 3 kW → the limit ends → the charger recovers.**
 
-Target: under 2 minutes, readable at 1080p, no audio required (captions on screen). Export a short GIF of the middle section for the README.
+Target: under 2 minutes, readable at 1080p, no audio required (captions on screen).
 
-## Which version to record
+## What to record
 
-- **Version A (works today):** one terminal running `npm run bridge-demo`. Everything is in one log, which is honest but busy.
-- **Version B (after v0.1 lands, preferred):** three terminals, one per part of the system, so a viewer *sees* the limit travel from the network to the charger. Needs a standalone bridge (`src/main.ts`, Tab C) that can be pointed at the mock CSIP-AUS server, and a standalone charger simulator runner (Tab B). See `plans/notes/tab-d.md`.
+One terminal running `npm run showcase`. It runs the mock network, the real bridge program (`src/main.ts`) and a simulated charger, and prints a line for each step, coloured by who's speaking (`NETWORK`, `BRIDGE`, `CHARGER`), with a live power bar at the bottom. It takes about 60 s and ends with `RESULT: PASS`.
+
+The README already has an animation of a real run (`docs/showcase.svg`, made by `npm run demo-animation`). The screen recording is for places that need a video: LinkedIn, a talk, an email.
 
 ## Before recording
 
-- [ ] `npm ci` done, `npm run typecheck` passes, and the demo passed in the last run.
-- [ ] Terminal font 18 pt or larger, dark theme, window wide enough that log lines don't wrap.
-- [ ] Notifications off, unrelated windows closed.
-- [ ] Do a full dry run first. The 3 kW control in `npm run mock-csip` starts **10 s** after the server starts and lasts **30 s**, so timing matters.
+- [ ] `npm ci` done and `npm run showcase` passed once in the last few minutes.
+- [ ] Terminal font 18 pt or larger, dark theme, at least 100 columns wide (the longest line is ~100 characters) and 25 rows tall.
+- [ ] A terminal that shows colours and redraws a line in place (Windows Terminal, macOS Terminal, any Linux terminal). If the bar prints a new line each time instead of updating, your terminal isn't seen as a TTY: run `npm run showcase -- --live`.
+- [ ] Notifications off, unrelated windows closed, nothing personal on screen (home directory in the prompt, other tabs, real network or account details). A plain prompt helps: in bash, `PS1='$ '`.
 
-## Version B: three terminals
-
-Lay the terminals side by side, left to right in the order the limit travels:
-
-| Window | Title | Command | What the viewer watches |
-|---|---|---|---|
-| Left | **Network** (mock CSIP-AUS server) | `npm run mock-csip` | Polls arriving; the control's start and end |
-| Middle | **Bridge** | *TODO (Tab C):* bridge with the demo config pointing at `http://localhost:8080/dcap` | `site limit 3000 W (control)` and `SetChargingProfile ... Accepted` |
-| Right | **Charger** | *TODO (Tab B):* standalone simulated charger | `now drawing 3000 W`, then back up |
+## Timeline
 
 | Time | On screen | Caption |
 |---|---|---|
-| 0:00–0:10 | Title card | "Australian networks can now limit EV chargers over CSIP-AUS. Open source." |
-| 0:10–0:20 | Start the Charger and Bridge windows. Charger connects and starts charging | "A charger connects over OCPP, the protocol chargers already speak." |
-| 0:20–0:30 | Start the Network window. Bridge picks up the 5 kW default; charger draws 5 kW | "The network's default limit for this site: 5 kW." |
-| 0:30–0:40 | Control starts. Bridge logs 3 kW; charger accepts the profile | "Peak period: the network sets a 3 kW import limit." |
-| 0:40–1:00 | Charger at 3000 W, reading after reading | "The charger drops to 3 kW and stays there." |
-| 1:00–1:10 | Control ends. Bridge logs 5 kW default; charger goes back up | "Limit ends: the charger recovers on its own." |
-| 1:10–1:35 | Optional: stop the Network window to show the fail-safe (or cut to `npm run failsafe-demo`) | "If the network link drops, the bridge falls back to the network's default limit." |
-| 1:35–2:00 | End card: repo URL, "what works / what doesn't yet" from the README | "Simulated chargers and a mock server today. Next: real chargers, alongside Open Dynamic Export." |
+| 0:00–0:08 | Title card | "Australian networks can limit EV chargers over CSIP-AUS. Here's an open-source bridge." |
+| 0:08–0:15 | Type `npm run showcase`, Enter | "A mock network, the real bridge and a simulated charger, on one laptop." |
+| 0:15–0:25 | `NETWORK default limit 5 kW`, `BRIDGE capping CP1 to 5000 W`, `CHARGER drawing 5000 W` | "The network's default limit for this site is 5 kW. The bridge caps the charger over OCPP." |
+| 0:25–0:35 | `NETWORK new control: limit this site to 3 kW from …` | "The network schedules a 3 kW limit." |
+| 0:35–0:50 | Control starts: `BRIDGE capping CP1 to 3000 W`, bar drops to 3000 W | "The bridge passes it on; the charger drops to 3 kW within a second or two." |
+| 0:50–1:05 | Bar holds at 3000 W (cut most of the 30 s here) | "It stays there for the whole control." |
+| 1:05–1:15 | `NETWORK control ended`, bar back to 5000 W | "Limit ends: the charger recovers on its own." |
+| 1:15–1:25 | `RESULT: PASS` | "The run checks itself: it fails if the charger ever goes over the limit." |
+| 1:25–1:45 | Optional: `npm run failsafe-demo` (or a caption only) | "If the network link drops, the bridge falls back to the network's default limit." |
+| 1:45–2:00 | End card: repo URL, and the "what doesn't work yet" list from the README | "Simulated chargers and a mock network today; tested with the real Open Dynamic Export in CI. Next: real chargers." |
 
-Note: start the Network window last (or restart it) so the 10 s countdown to the control begins when you're ready.
-
-## Version A: one terminal (fallback)
-
-1. Clear the terminal, type `npm run bridge-demo`, press Enter.
-2. Default 5 kW: both chargers settle at **2500 W** each.
-3. About 6 s in, the 3 kW control starts: both drop to **1500 W** each (3 kW for the site).
-4. 8 s later the control ends: both return to **2500 W**.
-5. Hold on the final lines (`shares applied` and `RESULT: PASS`) for 5 s.
-
-Captions as in Version B, but say "two chargers share the site's 3 kW".
+Keep the clock times on screen: they show the timeline is real even where you cut.
 
 ## After recording
 
 - [ ] Trim to under 2:00 and add captions.
-- [ ] Cut a ~15 s GIF of the drop and recovery, and replace the placeholder at the top of `README.md`.
-- [ ] Don't show anything personal in the recording: home directory paths, other windows, real network or account details.
+- [ ] Check nothing personal is visible in any frame.
+- [ ] Optional: regenerate the README animation from a fresh run with `npm run demo-animation` (writes `docs/showcase.svg` and `docs/showcase.cast` only if the run passed), and look at it in a browser before committing.
