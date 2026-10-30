@@ -1,6 +1,6 @@
 {
   "name": "csip-ocpp-bridge",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Bridge CSIP-AUS network limits to EV chargers over OCPP",
   "scripts": {
     "start": "tsx src/main.ts",
