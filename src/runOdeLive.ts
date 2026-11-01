@@ -13,10 +13,11 @@
 //                     script only plays the network, the solar inverter and
 //                     meter (over MQTT) and the charger, and checks the result.
 //
-// Checks: the charger is capped at the network's default (5 kW), drops to
-// 3 kW during a control the network adds while everything is running, and
-// goes back to 5 kW when it ends; ODE registers with the mock server and
-// posts telemetry to it.
+// Checks: with the fake meter telling ODE the house uses 500 W, and the bridge
+// reading that back from ODE's REST API, the charger gets the network's
+// default (5 kW) minus the house, drops to 3 kW minus the house during a
+// control the network adds while everything is running, and goes back when
+// it ends; ODE registers with the mock server and posts telemetry to it.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { copyFileSync, createWriteStream, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -50,6 +51,9 @@ const CONTROL_W = 3000;
 const CONTROL_IN_S = 10; // after the charger is first capped at the default
 const CONTROL_FOR_S = 20;
 const HOUSE_W = 500; // what the fake meter adds on top of the charger
+// One charger, so it gets everything the house leaves.
+const CHARGER_DEFAULT_W = DEFAULT_W - HOUSE_W;
+const CHARGER_CONTROL_W = CONTROL_W - HOUSE_W;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const problems: string[] = [];
@@ -127,6 +131,7 @@ if (odeDir) {
         JSON.stringify(
             {
                 limitSource: { type: 'ode-mqtt', url: MQTT_URL, topic: 'limits', fallbackImportLimitW: 1500 },
+                siteMeter: { type: 'ode-rest', url: `http://localhost:${local.odePort}` },
                 ocpp: { port: local.ocppPort },
                 chargers: [{ id: 'CP1' }],
                 log: { level: 'info', format: 'text' },
@@ -141,11 +146,13 @@ if (odeDir) {
 // ---- the site's solar inverter and meter, as ODE's MQTT inputs ----
 const sim = new SimCharger({ id: 'CP1', endpoint: OCPP_URL, log: () => {} });
 const devices = mqtt.connect(MQTT_URL, { reconnectPeriod: 500 });
-const fakeDevices = setInterval(() => {
-    if (!devices.connected) return;
-    devices.publish('fake/meter', JSON.stringify(siteSample(sim.currentPowerW() + HOUSE_W)));
-    devices.publish('fake/inverter', JSON.stringify(inverterSample()));
+const fakeInverter = setInterval(() => {
+    if (devices.connected) devices.publish('fake/inverter', JSON.stringify(inverterSample()));
 }, 1000);
+// Several times a second, like a real meter, so ODE's sample is never old.
+const fakeMeter = setInterval(() => {
+    if (devices.connected) devices.publish('fake/meter', JSON.stringify(siteSample(sim.currentPowerW() + HOUSE_W)));
+}, 200);
 
 // ---- the charger ----
 let connected = false;
@@ -169,7 +176,7 @@ const watch = setInterval(recordPower, 200);
 
 // ODE needs a few seconds to start, register and publish.
 let controlEndMs = 0;
-if (connected && (await waitFor(`the charger to be capped at the ${DEFAULT_W} W default`, 120_000, () => sim.currentPowerW() === DEFAULT_W))) {
+if (connected && (await waitFor(`the charger to be capped at the ${DEFAULT_W} W default minus the house`, 120_000, () => sim.currentPowerW() === CHARGER_DEFAULT_W))) {
     // The network schedules a control while everything is running.
     const start = csip.serverNow() + CONTROL_IN_S;
     csip.setScenario({
@@ -186,16 +193,16 @@ if (connected && (await waitFor(`the charger to be capped at the ${DEFAULT_W} W 
     // Halfway through, the charger must be at the control...
     await sleep(startMs + (CONTROL_FOR_S * 1000) / 2 - Date.now());
     const mid = sim.currentPowerW();
-    if (mid !== CONTROL_W) problems.push(`halfway through the control the charger draws ${mid} W, expected ${CONTROL_W}`);
+    if (mid !== CHARGER_CONTROL_W) problems.push(`halfway through the control the charger draws ${mid} W, expected ${CHARGER_CONTROL_W}`);
     // ...and back at the default soon after it ends.
     await sleep(controlEndMs - Date.now());
-    await waitFor(`the charger to go back to ${DEFAULT_W} W after the control`, 15_000, () => sim.currentPowerW() === DEFAULT_W);
+    await waitFor(`the charger to go back to ${CHARGER_DEFAULT_W} W after the control`, 15_000, () => sim.currentPowerW() === CHARGER_DEFAULT_W);
     // Never above the control from 5 s into it (ODE polls every 5 s) to its end.
     const over = powers.filter((p, i) => {
         const until = powers[i + 1]?.at ?? Date.now();
-        return p.w > CONTROL_W && until > startMs + 5000 && p.at < controlEndMs;
+        return p.w > CHARGER_CONTROL_W && until > startMs + 5000 && p.at < controlEndMs;
     });
-    if (over.length > 0) problems.push(`charger drew more than ${CONTROL_W} W during the control: ${over.map((p) => p.w).join(', ')} W`);
+    if (over.length > 0) problems.push(`charger drew more than ${CHARGER_CONTROL_W} W during the control: ${over.map((p) => p.w).join(', ')} W`);
 }
 
 // Telemetry: ODE posts readings every mupPostRateSec.
@@ -215,7 +222,8 @@ if (early > 0) console.log(`  ${early} of ${csip.telemetry.length} readings were
 // ---- report and clean up ----
 clearInterval(watch);
 recordPower();
-clearInterval(fakeDevices);
+clearInterval(fakeInverter);
+clearInterval(fakeMeter);
 console.log(`charger power changes (W): [${powers.map((p) => p.w).join(', ')}]`);
 await sim.stop().catch(() => {});
 devices.end(true);
@@ -232,7 +240,7 @@ if (problems.length > 0) {
     for (const p of problems) console.log(`  - ${p}`);
     process.exit(1);
 }
-console.log('RESULT: PASS - real ODE -> bridge -> charger followed the network: default, control, default');
+console.log('RESULT: PASS - real ODE -> bridge -> charger followed the network minus the house load: default, control, default');
 process.exit(0);
 
 // ---------------------------------------------------------------------------

@@ -132,6 +132,12 @@ export class SimCharger {
         }, this.meterIntervalMs);
     }
 
+    private setMeterIntervalS(seconds: number): void {
+        this.meterIntervalMs = seconds * 1000;
+        this.log(`now reporting power every ${seconds} s`);
+        if (this.meterTimer) this.startMeterTimer();
+    }
+
     // A fresh client per connection, so reconnect()/reboot() start clean.
     private async connect(): Promise<void> {
         // The library's option type marks every field required; we only need these.
@@ -164,6 +170,19 @@ export class SimCharger {
             this.log(`ClearChargingProfile id=${id ?? 'all'} -> now drawing ${this.currentPowerW()} W`);
             return { status: existed ? 'Accepted' : 'Unknown' };
         });
+
+        // How often to report, and that power is wanted. This sim always sends
+        // power; a real charger may need telling.
+        this.client.handle('ChangeConfiguration', async ({ params }) => {
+            if (params!.key === 'MeterValueSampleInterval') this.setMeterIntervalS(Number(params!.value));
+            return { status: 'Accepted' };
+        });
+        this.client.handle('SetVariables', async ({ params }) => ({
+            setVariableResult: params!.setVariableData.map((d: { component: object; variable: { name: string }; attributeValue: string }) => {
+                if (d.variable.name === 'TxUpdatedInterval') this.setMeterIntervalS(Number(d.attributeValue));
+                return { attributeStatus: 'Accepted', component: d.component, variable: d.variable };
+            }),
+        }));
 
         if (this.autoReconnect) this.watchConnection(this.client);
         await this.client.connect();

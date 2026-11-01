@@ -44,6 +44,14 @@ export type LimitSourceConfig =
           pen?: string;
       };
 
+export interface SiteMeterConfig {
+    type: 'ode-rest';
+    url: string; // ODE's address; the bridge reads <url>/api/coordinator/status
+    pollMs: number;
+    silentAfterMs: number; // no new reading for this long -> chargers get 0 W
+    chargerIdleAfterMs: number; // a charger silent this long counts as 0 W in the house load
+}
+
 export interface ChargerEntry {
     id: string;
     config: ChargerConfig; // defaults + chargerDefaults + this charger's own settings
@@ -54,6 +62,7 @@ export interface ChargerEntry {
 
 export interface Config {
     limitSource: LimitSourceConfig;
+    siteMeter?: SiteMeterConfig;
     ocpp: { port: number; bootWaitMs?: number };
     chargers: ChargerEntry[];
     bridge: { pollMs?: number; tickMs?: number; commsLostAfterMs?: number };
@@ -272,7 +281,7 @@ function chargerPassword(c: Checker, warnings: string[], path: string, id: strin
 export function parseConfig(raw: unknown, file = 'config', env: NodeJS.ProcessEnv = process.env): Config {
     const c = new Checker();
     const warnings: string[] = [];
-    const root = c.object(raw, '', ['$schema', 'limitSource', 'ocpp', 'chargerDefaults', 'chargers', 'bridge', 'log']) ?? {};
+    const root = c.object(raw, '', ['$schema', 'limitSource', 'siteMeter', 'ocpp', 'chargerDefaults', 'chargers', 'bridge', 'log']) ?? {};
 
     // -- limit source --
     let limitSource: LimitSourceConfig | undefined;
@@ -319,6 +328,29 @@ export function parseConfig(raw: unknown, file = 'config', env: NodeJS.ProcessEn
         } else {
             c.problems.push(`limitSource.type must be "ode-mqtt" (Open Dynamic Export over MQTT) or "csip" (built-in client, for the mock server), got ${show(type)}`);
         }
+    }
+
+    // -- site meter --
+    let siteMeter: SiteMeterConfig | undefined;
+    if (root.siteMeter !== undefined) {
+        const p = 'siteMeter';
+        const o = c.object(root.siteMeter, p, ['type', 'url', 'pollMs', 'silentAfterMs', 'chargerIdleAfterMs']) ?? {};
+        if (o.type !== 'ode-rest') c.problems.push(`siteMeter.type must be "ode-rest" (Open Dynamic Export's REST API), got ${show(o.type)}`);
+        const pollMs = c.number(o, p, 'pollMs', { min: 200, max: 10_000, integer: true }) ?? 1000;
+        const silentAfterMs = c.number(o, p, 'silentAfterMs', { min: 2000, integer: true }) ?? 15_000;
+        if (silentAfterMs <= pollMs) c.problems.push(`siteMeter.silentAfterMs (${silentAfterMs}) must be longer than siteMeter.pollMs (${pollMs}), or the meter always counts as silent`);
+        siteMeter = {
+            type: 'ode-rest',
+            url: c.string(o, p, 'url', true, /^https?:\/\/[^/\s]+\/?$/, 'must be ODE\'s address like "http://open-dynamic-export:3000", with no path'),
+            pollMs,
+            silentAfterMs,
+            chargerIdleAfterMs: c.number(o, p, 'chargerIdleAfterMs', { min: 1000, integer: true }) ?? 15_000,
+        };
+    } else if (limitSource?.type === 'ode-mqtt') {
+        warnings.push(
+            'siteMeter is not set, so the chargers share the WHOLE site limit with nothing left for the house: the site goes over ' +
+                'the limit whenever the house draws. Fine only if the chargers are the only load. See docs/configuration.md.',
+        );
     }
 
     // -- OCPP --
@@ -412,6 +444,7 @@ export function parseConfig(raw: unknown, file = 'config', env: NodeJS.ProcessEn
     if (c.problems.length > 0 || !limitSource) throw new ConfigError(file, c.problems);
     return {
         limitSource,
+        siteMeter,
         ocpp,
         chargers,
         bridge: { ...bridge, pollMs },

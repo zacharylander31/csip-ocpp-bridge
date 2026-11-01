@@ -56,9 +56,10 @@ Every other demo and what it proves: [docs/testing.md](docs/testing.md). Running
 
 Proven by automated checks that run in CI on every push, all against **simulated** chargers and a **mock** CSIP-AUS server:
 
-- **With the real Open Dynamic Export.** `docker compose up` runs the bridge, mosquitto and the real ODE `v0.20.0` image; ODE talks HTTPS with certificates to the mock network, and the charger follows 5000 → 3000 → 5000 W.
+- **With the real Open Dynamic Export.** `docker compose up` runs the bridge, mosquitto and the real ODE `v0.20.0` image; ODE talks HTTPS with certificates to the mock network, and with a 500 W house load the charger follows 4500 → 2500 → 4500 W (a 5 kW default and a 3 kW control, minus the house).
+- **Site meter:** the bridge reads the meter already set up in ODE, so chargers get `limit − house load`, and more when solar is exporting. If the meter goes silent for 15 s, chargers get 0 W until it's back.
 - **OCPP 1.6J and 2.0.1** chargers on the same bridge; caps in watts or amps; single or three phase; below ~6 A per phase the charger is paused instead of given a current the car can't use. Amps are worked out at 253 V, so a high supply voltage can't push the real draw over the share.
-- **Several chargers** share the site limit equally. With a site meter, chargers get `limit − house load`.
+- **Several chargers** share what's left of the site limit equally.
 - **Fail-safe:** no fresh limit for a set time (ODE silent, broker down, network unreachable) → the network's default control.
 - **Chargers that reboot or reconnect** get their cap re-sent.
 - **Only configured chargers** may connect: unknown ids are refused at the handshake (HTTP 404). **Per-charger passwords** (OCPP Security Profile 1, HTTP Basic auth) are optional per charger; a missing or wrong one is refused (HTTP 401). Passwords come from environment variables, never the config file, and never appear in logs.
@@ -75,7 +76,7 @@ Being honest about the limits:
 - **No V2G.** One-way chargers only.
 - **ODE ramps import limits slowly.** ODE ramps every limit change at the network's `setGradW` × the *solar inverter's* nameplate. With SA Power Networks' setting and a 5 kW inverter, 5 kW → 3 kW takes about 2.5 minutes, so a short control barely moves the charger. We think that ramp shouldn't apply to an EV import limit and plan to raise it with ODE.
 - **ODE doesn't fail safe on its own** when it loses the network: it keeps following its cached schedule. The bridge's fail-safe only covers ODE going silent.
-- **No real site meter yet** (simulated only), so on a real site each charger gets an equal share of the whole site limit, with nothing subtracted for the house.
+- **The site meter is untested on real hardware.** It works through ODE with simulated meters and chargers. It needs each charger to report power every few seconds: the bridge asks, but a charger that refuses gets throttled, because its draw looks like house load ([install guide](docs/install.md#site-meter)). There's no site meter without ODE (reading SunSpec/Modbus directly).
 - **arm64 (Raspberry Pi) image** not built or tested yet; CI only covers amd64.
 - **Single site.** One bridge manages one site. A paused charger's share isn't given to the others.
 

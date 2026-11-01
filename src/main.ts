@@ -5,8 +5,8 @@
 //   npm start -- --check                        validate the config and exit
 //
 // Starts, in order: the OCPP server (so chargers can connect straight away),
-// the limit source (ODE over MQTT, or the built-in CSIP-AUS client), then the
-// bridge's loops.
+// the limit source (ODE over MQTT, or the built-in CSIP-AUS client), the site
+// meter if there is one (ODE's REST API), then the bridge's loops.
 //
 // Shutdown (Ctrl+C, `docker compose stop`, SIGTERM): stop the bridge, the
 // limit source and the OCPP server, and exit. The chargers KEEP THEIR LAST
@@ -27,8 +27,12 @@ import { Manager } from './csms.js';
 import type { LimitSource } from './limitSource.js';
 import { configureLogging, createLogger, logFn } from './log.js';
 import { OdeMqttSource } from './odeMqttSource.js';
+import { OdeSiteMeter } from './odeSiteMeter.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+// How often to ask chargers to report power when there's a site meter. Keep
+// well under the default siteMeter.chargerIdleAfterMs (15 s).
+const POWER_REPORT_INTERVAL_S = 5;
 
 const log = createLogger('main');
 
@@ -61,6 +65,7 @@ if (args.check) {
 
 log.info(
     `starting: limits from ${config.limitSource.type} (${config.limitSource.url}), ` +
+        `site meter ${config.siteMeter ? `from ${config.siteMeter.type} (${config.siteMeter.url})` : 'none'}, ` +
         `${config.chargers.length} charger(s): ${config.chargers.map((c) => describeCharger(c)).join('; ')}`,
 );
 
@@ -73,6 +78,7 @@ const manager = new Manager(ocppLog, {
     onlyKnownChargers: true,
     // OCPP Security Profile 1: chargers with a passwordEnv must send that password.
     passwords: Object.fromEntries(config.chargers.filter((c) => c.password).map((c) => [c.id, c.password!])),
+    powerReportIntervalS: config.siteMeter ? POWER_REPORT_INTERVAL_S : undefined,
 });
 // Create the configured chargers now, before they connect, so the bridge can
 // own them from the start; they're attached when that id connects. Until then
@@ -81,7 +87,11 @@ const manager = new Manager(ocppLog, {
 const chargers = config.chargers.map((c) => manager.expect(c.id));
 
 const source = makeSource(config);
+const siteMeter = config.siteMeter && new OdeSiteMeter({ url: config.siteMeter.url, pollMs: config.siteMeter.pollMs, log: logFn('site-meter') });
 const bridge = new Bridge(source, chargers, {
+    siteMeter,
+    chargerIdleAfterMs: config.siteMeter?.chargerIdleAfterMs,
+    meterSilentAfterMs: config.siteMeter?.silentAfterMs,
     pollMs: config.bridge.pollMs,
     tickMs: config.bridge.tickMs,
     // For ODE, leaving this unset lets the source's own limitSource.commsLostAfterMs apply.
@@ -92,6 +102,7 @@ const bridge = new Bridge(source, chargers, {
 await manager.listen(config.ocpp.port);
 log.info(`chargers connect to ws://<this machine>:${config.ocpp.port}/<id>, e.g. ws://localhost:${config.ocpp.port}/${chargers[0].id}`);
 if (source instanceof OdeMqttSource) source.start();
+siteMeter?.start();
 await bridge.start();
 log.info('running');
 
@@ -113,6 +124,7 @@ async function shutdown(signal: string): Promise<void> {
 
     await bridge.stop(); // no new caps are sent after this; any in flight finish
     if (source instanceof OdeMqttSource) await source.stop();
+    await siteMeter?.stop();
     await manager.close();
     log.info('stopped');
     process.exit(0);

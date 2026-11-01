@@ -236,6 +236,48 @@ export class ManagedCharger implements Metered {
         this.send(this.wanted).catch((err) => this.log(`${this.id} re-send failed: ${(err as Error).message}`));
     }
 
+    /**
+     * Ask the charger to report power every `seconds` during a charge. A site
+     * meter needs this: chargers often report only energy, or only every few
+     * minutes, and a charger's draw we don't know about looks like house load.
+     * Never throws. A charger that refuses keeps its own settings (logged).
+     */
+    async requestPowerReports(seconds: number): Promise<void> {
+        const client = this.client;
+        if (!client) return;
+        const measurands = 'Power.Active.Import,Energy.Active.Import.Register';
+        try {
+            let statuses: string[];
+            if (this._version === '1.6') {
+                // 1.6 section 9.1: both are standard Core profile keys.
+                const set = (key: string, value: string) =>
+                    client.call('ChangeConfiguration', { key, value }) as Promise<{ status: string }>;
+                statuses = [
+                    (await set('MeterValueSampleInterval', String(seconds))).status,
+                    (await set('MeterValuesSampledData', measurands)).status,
+                ];
+            } else {
+                // 2.0.1 Part 2, SampledDataCtrlr: the "Tx updated" settings are the ones used during a transaction.
+                const variable = (name: string, attributeValue: string) => ({
+                    component: { name: 'SampledDataCtrlr' },
+                    variable: { name },
+                    attributeValue,
+                });
+                const res = (await client.call('SetVariables', {
+                    setVariableData: [variable('TxUpdatedInterval', String(seconds)), variable('TxUpdatedMeasurands', measurands)],
+                })) as { setVariableResult: { attributeStatus: string }[] };
+                statuses = res.setVariableResult.map((r) => r.attributeStatus);
+            }
+            // 1.6's RebootRequired still means it took the value, just not yet.
+            const ok = statuses.every((s) => s === 'Accepted' || s === 'RebootRequired');
+            this.log(ok
+                ? `${this.id} reports power every ${seconds} s`
+                : `${this.id} Rejected the power report settings (${statuses.join(', ')}): the site meter needs its Power.Active.Import readings, see docs/install.md`);
+        } catch (err) {
+            this.log(`${this.id} couldn't set power reports: ${(err as Error).message}. The site meter needs its Power.Active.Import readings, see docs/install.md`);
+        }
+    }
+
     // ---- sending ----
 
     // One send at a time, in order, so a re-send and a new cap from Bridge
@@ -339,6 +381,12 @@ export interface ManagerOptions {
      * ones that don't. Empty by default, so demos can just connect.
      */
     passwords?: Record<string, string>;
+    /**
+     * Ask each charger to report power this often (seconds), when it boots or
+     * connects. Off by default: only a site meter needs it, because its house
+     * load estimate depends on knowing what the chargers draw.
+     */
+    powerReportIntervalS?: number;
 }
 
 // A refused charger retries every few seconds; log it once a minute, not every time.
@@ -432,14 +480,15 @@ export class Manager {
 
             // Re-send the cap once the charger has booted, or after BOOT_WAIT_MS
             // if it doesn't boot (it only lost its connection).
-            const bootTimer = setTimeout(
-                () => charger.resync('reconnected without booting'),
-                this.options.bootWaitMs ?? BOOT_WAIT_MS,
-            );
+            const ready = (why: string) => {
+                charger.resync(why);
+                if (this.options.powerReportIntervalS) void charger.requestPowerReports(this.options.powerReportIntervalS);
+            };
+            const bootTimer = setTimeout(() => ready('reconnected without booting'), this.options.bootWaitMs ?? BOOT_WAIT_MS);
             const onBoot = () => {
                 clearTimeout(bootTimer);
                 // After our reply is on the wire: a charger may not take commands before boot is accepted.
-                setTimeout(() => charger.resync('booted'), 0);
+                setTimeout(() => ready('booted'), 0);
             };
             const onPower = (watts: number) => addReading(charger.readings, { at: Date.now(), watts });
 

@@ -55,11 +55,12 @@ In production the CSIP-AUS side is handled by [Open Dynamic Export](https://gith
 
 ### Splitting the site limit
 
-- House load = site meter reading − chargers' latest readings, using only readings that arrived **after** the last cap change was acknowledged. House load can be negative when solar is exporting.
+- The site meter is Open Dynamic Export's, read from its REST API (`src/odeSiteMeter.ts`). A sample only counts if its date changed since the last one, because ODE keeps returning its last sample when its meter dies.
+- House load = site meter reading − chargers' latest readings, using only readings taken **after** the last cap change was acknowledged (+ `SETTLE_MS`). While a charger's latest report is from before the change, the last estimate is held. House load can be negative when solar is exporting.
 - Each charger gets `(limit − house) / chargers`, rounded down to 100 W.
 - Lower shares are sent at once. Higher shares are only sent when they rise by at least 300 W, to avoid chatter.
-- No recent house estimate (no reading, or older than 60 s) → chargers get 0 W.
-- A charger with no reading for 5 s counts as 0 W, which overstates the house load: the safe side.
+- No site meter reading for `silentAfterMs` (15 s), or none yet → chargers get 0 W.
+- A charger offline, or with no reading for `chargerIdleAfterMs` (15 s), counts as 0 W, which overstates the house load if it's really drawing: the safe side. With a site meter, chargers are asked to report power every 5 s.
 
 ### Fail-safe
 
@@ -84,6 +85,7 @@ One MirrorUsagePoint for the chargers (roleFlags `45`: mirror + PEV + submeter) 
 | `src/bridge.ts` | The bridge: poll, tick and telemetry loops |
 | `src/csms.ts` | Minimal OCPP 2.0.1 central system: accepts chargers, records readings, caps and uncaps |
 | `src/chargerSim.ts` | Simulated OCPP 2.0.1 charger (EV wants 7.4 kW, obeys the lowest limit) |
+| `src/odeSiteMeter.ts` | Site meter: reads Open Dynamic Export's meter from its REST API |
 | `src/siteMeterSim.ts` | Simulated site meter |
 | `src/telemetry.ts` | Average power over an interval |
 | `src/run*.ts`, `src/checkCsipClient.ts` | Demos and checks, see [testing.md](testing.md) |

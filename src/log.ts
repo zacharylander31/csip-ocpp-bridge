@@ -97,7 +97,7 @@ export function logFn(component: string): (msg: string) => void {
     return (msg) => (WARN_WORDS.test(msg) ? log.warn(msg) : log.info(msg));
 }
 
-const WARN_WORDS = /fail|error|couldn't|COMMS LOST|lost|offline|Rejected|said (?!Accepted)|dropped|bad message|invalid/i;
+const WARN_WORDS = /fail|error|couldn't|COMMS LOST|lost|offline|Rejected|said (?!Accepted)|dropped|bad message|invalid|SILENT/i;
 
 /** For tests: capture lines instead of printing them, and forget repeats. */
 export function captureLogs(sink: (level: LogLevel, line: string) => void): void {

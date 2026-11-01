@@ -22,7 +22,8 @@ function errorsFor(raw: unknown, env: NodeJS.ProcessEnv = {}): string[] {
 const hasError = (raw: unknown, fragment: string) => errorsFor(raw).some((p) => p.includes(fragment));
 
 const odeSource = { type: 'ode-mqtt', url: 'mqtt://mosquitto:1883', topic: 'limits', fallbackImportLimitW: 1500 };
-const minimal = { limitSource: odeSource, chargers: [{ id: 'CP1' }] };
+const meter = { type: 'ode-rest', url: 'http://open-dynamic-export:3000' };
+const minimal = { limitSource: odeSource, siteMeter: meter, chargers: [{ id: 'CP1' }] };
 
 // -- comment stripping --
 check(stripJsonComments('{"a": "mqtt://x" // c\n}') === '{"a": "mqtt://x"     \n}', '// comment stripped, // inside a string kept');
@@ -84,6 +85,24 @@ check(
 );
 const many = errorsFor({ limitSource: { type: 'csip' }, chargers: [{ phases: 2 }], ocpp: { port: 'x' } });
 check(many.length >= 4, `all problems reported at once (${many.length}): ${many.join(' | ')}`);
+
+// -- site meter --
+const meterOf = (m: object) => parseConfig({ ...minimal, siteMeter: { ...meter, ...m } }, 'test', {}).siteMeter;
+const meterDefaults = meterOf({});
+check(meterDefaults?.pollMs === 1000 && meterDefaults.silentAfterMs === 15_000 && meterDefaults.chargerIdleAfterMs === 15_000, 'site meter defaults: poll 1 s, silent 15 s, charger idle 15 s');
+check(meterOf({ url: 'http://localhost:3000/' })?.url === 'http://localhost:3000/', 'site meter URL with a trailing slash accepted');
+check(example.siteMeter?.type === 'ode-rest', 'example: site meter from ODE');
+const noMeter = parseConfig({ limitSource: odeSource, chargers: [{ id: 'CP1' }] }, 'test', {});
+check(noMeter.siteMeter === undefined && noMeter.warnings.some((w) => w.includes('siteMeter is not set')), 'ode-mqtt without a site meter warns');
+check(!csip.warnings.some((w) => w.includes('siteMeter')), 'csip (mock server) without a site meter: no warning');
+const meterError = (m: object, fragment: string) => hasError({ ...minimal, siteMeter: { ...meter, ...m } }, fragment);
+check(meterError({ type: 'modbus' }, 'siteMeter.type must be "ode-rest"'), 'unknown site meter type rejected');
+check(meterError({ url: 'open-dynamic-export:3000' }, "must be ODE's address"), 'site meter URL without http:// rejected');
+check(meterError({ url: 'http://ode:3000/api/coordinator/status' }, "must be ODE's address"), 'site meter URL with a path rejected');
+check(meterError({ pol: 1000 }, 'siteMeter.pol is not a known option'), 'site meter typo rejected');
+check(meterError({ pollMs: 50 }, 'siteMeter.pollMs must be'), 'site meter poll of 50 ms rejected');
+check(meterError({ pollMs: 5000, silentAfterMs: 5000 }, 'must be longer than siteMeter.pollMs'), 'silentAfterMs <= pollMs rejected');
+check(hasError({ ...minimal, siteMeter: 'ode' }, 'siteMeter must be an object'), 'site meter that is not an object rejected');
 
 // -- charger passwords (OCPP Security Profile 1) --
 const GOOD_PW = 'Xq7-vT2_kL9pR4mZ'; // 16 characters
