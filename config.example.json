@@ -35,6 +35,23 @@
         "fallbackImportLimitW": 1500
     },
 
+    // The site's meter, so the chargers only get what the house isn't using.
+    // Without it they share the whole limit and the site goes over it whenever
+    // the house draws. The bridge reads the meter you've set up in ODE, so
+    // there's nothing to wire up. Check ODE's meter reads positive when the
+    // site imports (ODE's dashboard shows it).
+    "siteMeter": {
+        // "ode-rest": ODE's REST API. Not MQTT: ODE doesn't publish its meter there.
+        "type": "ode-rest",
+
+        // ODE's address. "open-dynamic-export" is its name inside docker-compose.yml.
+        "url": "http://open-dynamic-export:3000"
+
+        // "pollMs": 1000,             // how often to read it
+        // "silentAfterMs": 15000,     // no new reading for this long: chargers get 0 W until it's back
+        // "chargerIdleAfterMs": 15000 // a charger silent this long counts as 0 W. Must be longer than the time between its power reports
+    },
+
     // The OCPP server chargers connect to: ws://<this box>:<port>/<charger id>
     "ocpp": {
         "port": 9000

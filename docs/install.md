@@ -117,6 +117,15 @@ A charger without `passwordEnv` still connects without one, so a charger that do
 
 **Security Profile 1 is not encryption.** Without TLS, the password crosses your network in plain text on every connect (Basic auth is only base64, which anyone can decode), and so does every OCPP message. Anyone who can watch that traffic (a compromised device on the same network or Wi-Fi) can copy the password. It stops a misconfigured or casual device from posing as a charger; it does not stop a determined attacker on your LAN. Keep the chargers and the box on a private network or VLAN. The next step is Security Profile 2 (TLS, `wss://`), which the bridge doesn't support yet.
 
+### Site meter
+
+The network's limit is for the whole site, so the bridge needs to know what the house uses. It reads the meter you set up in ODE: nothing to wire up, just keep `siteMeter` in `config.json` ([options](configuration.md#sitemeter-so-chargers-only-get-what-the-house-isnt-using)).
+
+Check these on a new site:
+
+1. **The meter's sign.** ODE's dashboard should show the site's power as positive when importing and negative when exporting. A CT clamp on backwards breaks ODE's solar control too, and would hand the chargers power that isn't there.
+2. **Each charger's power reports.** House load is the site meter minus what the chargers report, so a charger's draw that the bridge doesn't know about looks like house load. The bridge asks every charger to report `Power.Active.Import` every 5 s when it connects. Look for `CP1 reports power every 5 s` in the log. If you see `Rejected the power report settings` or `couldn't set power reports` instead, set it in the charger's own settings if you can. If the charger reports more slowly, raise `siteMeter.chargerIdleAfterMs` to more than the time between its reports. **A charger that never reports power will be cut and raised over and over:** safe for the limit, but no good for charging. This hasn't been tried on real chargers yet, so please [report what you find](../CONTRIBUTING.md).
+
 ### Check it works
 
 ```bash
@@ -130,28 +139,31 @@ docker compose logs -f bridge
 Log lines to look for, in order:
 
 ```
-INFO  [main] starting: limits from ode-mqtt (mqtt://mosquitto:1883), 1 charger(s): CP1 (W, 1-phase, 230 V nominal / 253 V max, min 6 A, password from BRIDGE_CP1_PASSWORD)
+INFO  [main] starting: limits from ode-mqtt (mqtt://mosquitto:1883), site meter from ode-rest (http://open-dynamic-export:3000), 1 charger(s): CP1 (W, 1-phase, 230 V nominal / 253 V max, min 6 A, password from BRIDGE_CP1_PASSWORD)
 INFO  [ocpp] listening on ws://localhost:9000
 INFO  [ode-mqtt] connected to mqtt://mosquitto:1883, subscribing to limits/csipAus
 INFO  [main] running
-INFO  [ocpp] CP1 connected (OCPP 2.0.1), reconnect
-INFO  [bridge] site limit 5000 W (default) -> 5000 W each for CP1
-INFO  [ocpp] CP1 SetChargingProfile 5000 W -> Accepted
+INFO  [ocpp] CP1 connected (OCPP 2.0.1)
+INFO  [ocpp] CP1 reports power every 5 s
+INFO  [bridge] site limit 5000 W (default), house 1000 W -> 4000 W each for CP1
+INFO  [ocpp] CP1 SetChargingProfile 4000 W -> Accepted
 ```
 
 - `site limit ... (default)` or `(control <mRID>)`: the limit arrived from ODE.
+- `house 1000 W`: the site meter is being read. `house load unknown` with `0 W each` means it isn't yet: normal for the first few seconds, while ODE starts.
 - `SetChargingProfile ... -> Accepted`: the charger took the cap.
 - ODE's dashboard (`http://<box>:3000`) shows what ODE itself received from the network.
 
-Each line has a UTC timestamp, a level and a component (`main`, `bridge`, `ocpp`, `ode-mqtt`). Set `"log": { "format": "json" }` for one JSON object per line.
+Each line has a UTC timestamp, a level and a component (`main`, `bridge`, `ocpp`, `ode-mqtt`, `site-meter`). Set `"log": { "format": "json" }` for one JSON object per line.
 
 ### What happens when things fail
 
 | What fails | What the bridge does |
 |---|---|
 | **ODE or the broker goes silent** (no valid message for `limitSource.commsLostAfterMs`, default 10 s) | Logs `COMMS LOST` and applies the **default** limit: the network's default control as last seen from ODE, else `fallbackImportLimitW`. If neither is known, caps are removed, which is why setting `fallbackImportLimitW` matters. When messages come back, it follows ODE again. Note: ODE keeps following its cached schedule when *it* loses the network, so "silent" means ODE or the broker is down, not the network. |
+| **The site meter goes silent** (no new sample from ODE for `siteMeter.silentAfterMs`, default 15 s: ODE down, or its meter dead) | Logs `SITE METER SILENT` and gives the chargers **0 W**: the house could be using anything, and 0 W is the only share that can't break the limit. Charging resumes by itself when readings come back. So restarting ODE pauses charging if it takes longer than that. |
 | **A bad MQTT message** | Ignored; it never changes the limit, and doesn't count as "still alive". Logged at most once per 30 s. |
-| **A charger disconnects** | Its share is still reserved (the site limit is split over every configured charger). When it reconnects, the bridge re-sends its cap before counting it as compliant. Logs `couldn't update CP1 ... offline` (folded to once a minute) meanwhile. |
+| **A charger disconnects** | Its share is still reserved (the site limit is split over every configured charger). When it reconnects, the bridge re-sends its cap before counting it as compliant. Logs `couldn't update CP1 ... offline` (folded to once a minute) meanwhile. If it's still drawing, that draw counts as house load, so the other chargers get less: the safe side. |
 | **A charger rejects a cap** | Logged and retried every tick. Usually means `rateUnit` is wrong for that charger. |
 | **The bridge stops** (`docker compose stop`, SIGTERM, Ctrl+C) | Stops cleanly within a few seconds and **leaves each charger's last cap in place**. Removing caps on the way out would let every charger draw full power while nothing enforces the network's limit. On restart it sends every charger its current share straight away. |
 | **The bridge crashes** | Exits; Docker restarts it. Caps stay on the chargers in the meantime. |

@@ -59,19 +59,21 @@ const DEFAULT_POST_RATE_SEC = 300;
 
 const SHARE_STEP_W = 100;
 const RAISE_HYSTERESIS_W = 300;
-// A charger with no meter reading for this long has no car (or has dropped
-// off the network) and counts as drawing 0 W in the house load estimate.
-const CHARGER_IDLE_AFTER_MS = 5000;
-// A house load estimate is no good once its site meter reading is this old.
-// Without one, the chargers get nothing: we can't tell how much room is left.
-// TODO: decide how long a real meter may be silent before giving up.
-const HOUSE_ESTIMATE_MAX_AGE_MS = 60_000;
+const DEFAULT_CHARGER_IDLE_AFTER_MS = 15_000;
+const DEFAULT_METER_SILENT_AFTER_MS = 15_000;
 
 export interface BridgeOptions {
     pollMs?: number;
     tickMs?: number;
     commsLostAfterMs?: number; // no good data for this long -> apply the default
     siteMeter?: Metered; // omit to treat the chargers as the only load
+    // A charger with no meter reading for this long has no car and counts as
+    // drawing 0 W in the house load. Must be longer than the charger's
+    // reporting interval, or a charging car looks like house load.
+    chargerIdleAfterMs?: number;
+    // No site meter reading for this long -> the chargers get nothing: we
+    // can't tell how much room is left.
+    meterSilentAfterMs?: number;
     log?: (msg: string) => void;
 }
 
@@ -119,10 +121,12 @@ export class Bridge {
     // don't know what profile it already has.
     private appliedW = new Map<string, number | undefined>();
 
-    // House load estimate (site meter minus chargers), and when the site
-    // meter reading behind it was taken.
-    private house?: { watts: number; at: number };
+    private houseW?: number; // house load estimate: site meter minus chargers
     private lastChangeAt = 0; // when the last batch of changes finished (all replies in)
+    private chargerIdleAfterMs: number;
+    private meterSilentAfterMs: number;
+    private meterSilent = false; // only used to log the moment it changes
+    private createdAt = Date.now();
 
     // Telemetry.
     private mirrors: MirrorKind[];
@@ -142,6 +146,8 @@ export class Bridge {
         this.commsLostAfterMs = opts.commsLostAfterMs ?? source.commsLostAfterMs ?? 3 * this.pollMs;
         if (source instanceof CsipClient) this.telemetryClient = source;
         this.siteMeter = opts.siteMeter;
+        this.chargerIdleAfterMs = opts.chargerIdleAfterMs ?? DEFAULT_CHARGER_IDLE_AFTER_MS;
+        this.meterSilentAfterMs = opts.meterSilentAfterMs ?? DEFAULT_METER_SILENT_AFTER_MS;
         this.mirrors = this.siteMeter ? ['chargers', 'site'] : ['chargers'];
         this.log = opts.log ?? ((m) => console.log(`[BRIDGE] ${m}`));
     }
@@ -203,6 +209,7 @@ export class Bridge {
 
         this.updateHouseLoad();
         const houseW = this.currentHouseW();
+        this.logMeterChange(houseW);
         let budgetW: number | undefined;
         if (limit.importLimitW !== undefined) {
             budgetW = !this.siteMeter
@@ -261,17 +268,33 @@ export class Bridge {
         let chargersW = 0;
         for (const charger of this.chargers) {
             const r = charger.readings.at(-1);
-            if (r && r.at >= settledAt) chargersW += r.watts;
-            else if (!r || site.at - r.at > CHARGER_IDLE_AFTER_MS) continue; // no car: 0 W
-            else return; // it'll report any moment; wait for it
+            // Offline, or no car: 0 W. If it's really drawing, that overstates
+            // the house, which leaves the chargers less: the safe side.
+            if (!charger.connected || !r || site.at - r.at > this.chargerIdleAfterMs) continue;
+            if (r.at < settledAt) return; // from before the change; wait for its next report
+            chargersW += r.watts;
         }
-        this.house = { watts: site.watts - chargersW, at: site.at };
+        this.houseW = site.watts - chargersW;
     }
 
+    // The latest meter reading's age, not the estimate's: while waiting for a
+    // charger to report, the estimate is held, and that isn't a silent meter.
     private currentHouseW(): number | undefined {
-        if (!this.house) return undefined;
-        if (Date.now() - this.house.at > HOUSE_ESTIMATE_MAX_AGE_MS) return undefined;
-        return this.house.watts;
+        const site = this.siteMeter?.readings.at(-1);
+        if (!site || Date.now() - site.at > this.meterSilentAfterMs) return undefined;
+        return this.houseW;
+    }
+
+    // Says so when the meter goes quiet or comes back. At boot it's normal to
+    // have no estimate yet, so that only counts once the silent time has passed.
+    private logMeterChange(houseW: number | undefined): void {
+        if (!this.siteMeter) return;
+        const silent = houseW === undefined && Date.now() - this.createdAt > this.meterSilentAfterMs;
+        if (silent === this.meterSilent) return;
+        this.meterSilent = silent;
+        this.log(silent
+            ? `SITE METER SILENT: no usable reading for over ${this.meterSilentAfterMs / 1000} s, chargers get 0 W until it's back`
+            : `site meter back: house ${Math.round(houseW ?? 0)} W`);
     }
 
     // Never throws: one charger failing mustn't stop the others being updated.

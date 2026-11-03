@@ -39,6 +39,25 @@ The bridge reads one config file at start-up. Start from an example:
 
 With `csip`, the bridge also posts charger telemetry back to the server. With `ode-mqtt` it doesn't: ODE talks to the network.
 
+### `siteMeter`: so chargers only get what the house isn't using
+
+The network's limit is for the **whole site**. With a site meter, chargers share `limit − house load`, where house load = site meter − what the chargers report. It's negative when solar is exporting, which leaves the chargers more than the limit: right, because the site as a whole still imports no more than the limit.
+
+**Without `siteMeter`, chargers share the whole limit and the site goes over it whenever the house draws.** A warning is logged at start-up if `ode-mqtt` has no site meter; leave it out only if the chargers are the only load on the connection.
+
+`"type": "ode-rest"`: read the meter already set up in Open Dynamic Export, from its REST API (`GET <url>/api/coordinator/status`). ODE doesn't publish its meter over MQTT. Any ODE meter works: positive = importing, negative = exporting.
+
+| Option | Type | Default | Required | What it does |
+|---|---|---|---|---|
+| `url` | string | — | yes | ODE's address, no path, e.g. `http://open-dynamic-export:3000`. |
+| `pollMs` | integer, 200–10000 | 1000 | no | How often to read it. |
+| `silentAfterMs` | integer ≥ 2000, > `pollMs` | 15000 | no | No **new** sample for this long (ODE down, or its meter dead, so its sample's date stopped changing) = silent: chargers get **0 W** until it's back, and `SITE METER SILENT` is logged. |
+| `chargerIdleAfterMs` | integer ≥ 1000 | 15000 | no | A charger that hasn't reported power for this long counts as drawing 0 W. **Must be longer than the time between the charger's power reports**, or a charging car looks like house load and the charger gets throttled. The bridge asks chargers to report every 5 s, but some refuse: see [install.md](install.md#site-meter). |
+
+**Why 0 W when the meter is silent:** the house could be using anything, and 0 W is the only share that can't put the site over the limit. The cost is that charging pauses whenever ODE is down or restarting. With ODE down the limit goes quiet too, so the default limit applies after `limitSource.commsLostAfterMs` (10 s) and chargers get 0 W after `silentAfterMs` (15 s). Charging resumes by itself.
+
+**A blind spot:** ODE's `"mqtt"` meter type stamps a new date on its last message every time it's read, so the bridge can't tell when *that* meter has died. ODE's `sunspec`, `sma` and `powerwall2` meters don't have this problem.
+
 ### `ocpp`: the server chargers connect to
 
 | Option | Type | Default | Required | What it does |
@@ -84,7 +103,7 @@ Timestamps are UTC. The same warning repeated within a minute is printed once, t
 
 ### Not configurable yet
 
-- A site meter (the code supports one, but only the simulated meter exists).
+- A site meter other than ODE's (reading SunSpec/Modbus directly, for a site without ODE).
 - OCPP Security Profiles 2 and 3 (TLS, `wss://`, client certificates). Profile 1 (passwords, `passwordEnv`) is supported, but without TLS the password crosses the network in plain text.
 - Setting a charger's password from the bridge (2.0.1 `SetVariables` / 1.6 `ChangeConfiguration`); set it in the charger's own settings.
 - Reading a charger's W/A and phase capabilities from the charger instead of from this file.
@@ -102,4 +121,4 @@ The bridge checks the whole file before starting anything. If anything is wrong 
 
 Unknown options are errors on purpose: a typo like `phase` for `phases` would otherwise silently fall back to the default. JSON syntax errors give the position (`not valid JSON: Expected ',' or '}' after property value in JSON at position 13 (line 3 column 3)`); line numbers count comments, since they're blanked out, not removed.
 
-Warnings (the bridge still starts) are logged at `WARN` after the config loads: no `fallbackImportLimitW`, an amps charger with `maxVoltage` below 253 V, a username without a password, plain-http `csip` to a remote host, some chargers with a `passwordEnv` and some without, two chargers sharing one password variable, or a charger password that is exactly 40 hex digits (some OCPP 1.6 chargers treat that as a hex-encoded binary key and send different bytes).
+Warnings (the bridge still starts) are logged at `WARN` after the config loads: no `fallbackImportLimitW`, `ode-mqtt` with no `siteMeter`, an amps charger with `maxVoltage` below 253 V, a username without a password, plain-http `csip` to a remote host, some chargers with a `passwordEnv` and some without, two chargers sharing one password variable, or a charger password that is exactly 40 hex digits (some OCPP 1.6 chargers treat that as a hex-encoded binary key and send different bytes).

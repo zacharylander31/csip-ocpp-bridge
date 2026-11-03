@@ -6,6 +6,7 @@
         "topic": "limits",
         "fallbackImportLimitW": 1500
     },
+    "siteMeter": { "type": "ode-rest", "url": "http://open-dynamic-export:3000" },
     "ocpp": { "port": 9000 },
     "chargers": [{ "id": "CP1" }],
     "log": { "level": "info", "format": "text" }

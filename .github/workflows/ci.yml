@@ -49,6 +49,9 @@ jobs:
       - name: site-demo (site meter)
         run: npm run site-demo
         timeout-minutes: 3
+      - name: site-meter-demo (main.ts with ODE's meter, house load, meter silent)
+        run: npm run site-meter-demo
+        timeout-minutes: 4
       - name: ode-demo (limits from Open Dynamic Export over MQTT)
         run: npm run ode-demo
         timeout-minutes: 3
