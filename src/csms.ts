@@ -103,6 +103,9 @@ export const SETTLE_MS = 300;
 export interface PowerReading {
     at: number; // ms since epoch, when the server received it
     watts: number;
+    // Not measured: the charger said it stopped charging, so 0 W from now.
+    // A site meter reading from before this still includes the car's draw.
+    stopped?: true;
 }
 
 /** Anything that reports power over time: a charger or the site meter. */
@@ -491,9 +494,20 @@ export class Manager {
                 setTimeout(() => ready('booted'), 0);
             };
             const onPower = (watts: number) => addReading(charger.readings, { at: Date.now(), watts });
+            // The charger says it isn't charging (session ended, car unplugged,
+            // suspended). Record 0 W now rather than letting its last draw
+            // count until it goes stale: that phantom draw makes the house
+            // look smaller, so every charger's cap goes up, and a car plugging
+            // back in would start at the inflated cap. 0 W is the safe way
+            // round if we're wrong: the house looks bigger, the caps smaller.
+            const onNotCharging = (why: string) => {
+                if (charger.latestW === 0) return;
+                addReading(charger.readings, { at: Date.now(), watts: 0, stopped: true });
+                this.log(`${id} ${why}: counting it as 0 W`);
+            };
 
-            if (version === '1.6') this.handle16(client, onBoot, onPower);
-            else this.handle201(client, onBoot, onPower);
+            if (version === '1.6') this.handle16(client, onBoot, onPower, onNotCharging);
+            else this.handle201(client, onBoot, onPower, onNotCharging);
 
             client.on('close', () => {
                 clearTimeout(bootTimer);
@@ -536,21 +550,36 @@ export class Manager {
     }
 
     // OCPP 1.6J: the messages a charger sends us (1.6 section 4).
-    private handle16(client: ServerClient, onBoot: () => void, onPower: (w: number) => void): void {
+    private handle16(
+        client: ServerClient,
+        onBoot: () => void,
+        onPower: (w: number) => void,
+        onNotCharging: (why: string) => void,
+    ): void {
         const now = () => new Date().toISOString();
         client.handle('BootNotification', async () => {
             onBoot();
             return { status: 'Accepted', currentTime: now(), interval: 300 };
         });
         client.handle('Heartbeat', async () => ({ currentTime: now() }));
-        client.handle('StatusNotification', async () => ({}));
+        // 1.6 section 4.9: only "Charging" means the car is drawing power
+        // (Available, Preparing, SuspendedEV/EVSE, Finishing, Faulted... don't).
+        // Connector 0 is the charge point as a whole, which can say Available
+        // while connector 1 charges, so it's ignored.
+        client.handle('StatusNotification', async ({ params }) => {
+            if (params!.connectorId !== 0 && params!.status !== 'Charging') onNotCharging(`status ${params!.status}`);
+            return {};
+        });
         // We're the only CSMS a site charger has, so we also authorise. TODO: real ID tag checks.
         client.handle('Authorize', async () => ({ idTagInfo: { status: 'Accepted' } }));
         client.handle('StartTransaction', async () => ({
             idTagInfo: { status: 'Accepted' },
             transactionId: ++this.transactionNo,
         }));
-        client.handle('StopTransaction', async () => ({}));
+        client.handle('StopTransaction', async () => {
+            onNotCharging('transaction stopped');
+            return {};
+        });
         client.handle('DataTransfer', async () => ({ status: 'UnknownVendorId' }));
         client.handle('FirmwareStatusNotification', async () => ({}));
         client.handle('DiagnosticsStatusNotification', async () => ({}));
@@ -571,14 +600,24 @@ export class Manager {
     }
 
     // OCPP 2.0.1.
-    private handle201(client: ServerClient, onBoot: () => void, onPower: (w: number) => void): void {
+    private handle201(
+        client: ServerClient,
+        onBoot: () => void,
+        onPower: (w: number) => void,
+        onNotCharging: (why: string) => void,
+    ): void {
         const now = () => new Date().toISOString();
         client.handle('BootNotification', async () => {
             onBoot();
             return { currentTime: now(), interval: 300, status: 'Accepted' };
         });
         client.handle('Heartbeat', async () => ({ currentTime: now() }));
-        client.handle('StatusNotification', async () => ({}));
+        // "Occupied" = a car is plugged in, charging or not: say nothing.
+        // Available, Reserved, Unavailable and Faulted all mean no car drawing.
+        client.handle('StatusNotification', async ({ params }) => {
+            if (params!.connectorStatus !== 'Occupied') onNotCharging(`connector ${params!.connectorStatus}`);
+            return {};
+        });
         client.handle('Authorize', async () => ({ idTokenInfo: { status: 'Accepted' } }));
         client.handle('NotifyEvent', async () => ({}));
         client.handle('NotifyReport', async () => ({}));
@@ -610,6 +649,8 @@ export class Manager {
         // During a transaction meter values come in TransactionEvent; outside one, in MeterValues.
         client.handle('TransactionEvent', async ({ params }) => {
             readMeterValues(params!.meterValue);
+            // After the meter values: an Ended event's final reading isn't what it draws now.
+            if (params!.eventType === 'Ended') onNotCharging('transaction ended');
             return {};
         });
         client.handle('MeterValues', async ({ params }) => {

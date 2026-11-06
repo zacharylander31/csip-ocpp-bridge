@@ -59,6 +59,7 @@ export class SimCharger {
     // Kept in memory only: reboot() forgets them, like many real chargers do.
     private limitsW = new Map<number, number>();
     private energyWh = 0;
+    private pluggedIn = true; // see unplug() / plugIn()
     private seqNo = 0;
     private transactionId = `tx-${Date.now()}`; // 2.0.1: chosen by the charger
     private transactionId16?: number; // 1.6: chosen by the CSMS in StartTransaction
@@ -83,6 +84,7 @@ export class SimCharger {
     // Lowest limit wins; with no limits the car draws its max. If the limit
     // leaves less than the car's minimum current, the car stops (0 W).
     currentPowerW(): number {
+        if (!this.pluggedIn) return 0;
         const allowedW = Math.min(this.evMaxW, ...this.limitsW.values());
         const minW = this.evMinAmpsPerPhase * this.voltage * this.phases;
         return allowedW < minW ? 0 : allowedW;
@@ -113,6 +115,43 @@ export class SimCharger {
 
     async stop(): Promise<void> {
         await this.disconnect();
+    }
+
+    /**
+     * The car leaves: the transaction ends and the connector is free, as a
+     * real charger reports it. Meter values stop. Profiles are kept.
+     */
+    async unplug(): Promise<void> {
+        clearInterval(this.meterTimer);
+        this.pluggedIn = false;
+        const now = new Date().toISOString();
+        if (this.protocol === '1.6') {
+            await this.client.call('StopTransaction', {
+                transactionId: this.transactionId16,
+                meterStop: Math.round(this.energyWh),
+                timestamp: now,
+                reason: 'EVDisconnected',
+            });
+            await this.client.call('StatusNotification', { connectorId: 1, errorCode: 'NoError', status: 'Available' });
+        } else {
+            await this.client.call('TransactionEvent', {
+                eventType: 'Ended',
+                timestamp: now,
+                triggerReason: 'EVDeparted',
+                seqNo: this.seqNo++,
+                transactionInfo: { transactionId: this.transactionId, chargingState: 'Idle', stoppedReason: 'EVDisconnected' },
+                evse: { id: 1, connectorId: 1 },
+            });
+            await this.client.call('StatusNotification', { timestamp: now, connectorStatus: 'Available', evseId: 1, connectorId: 1 });
+        }
+        this.log('UNPLUGGED: transaction ended, drawing 0 W');
+    }
+
+    /** A car arrives: a new transaction starts and it draws up to its cap straight away. */
+    async plugIn(): Promise<void> {
+        this.pluggedIn = true;
+        await this.startTransaction();
+        this.log(`PLUGGED IN -> drawing ${this.currentPowerW()} W`);
     }
 
     private async disconnect(): Promise<void> {
@@ -238,13 +277,26 @@ export class SimCharger {
     }
 
     private async boot(): Promise<void> {
-        const now = () => new Date().toISOString();
         if (this.protocol === '1.6') {
             const boot = (await this.client.call('BootNotification', {
                 chargePointVendor: 'csip-ocpp-bridge',
                 chargePointModel: 'SimCharger16',
             })) as { status: string };
             this.log(`BootNotification (1.6) -> ${boot.status}`);
+        } else {
+            const boot = (await this.client.call('BootNotification', {
+                reason: 'PowerUp',
+                chargingStation: { model: 'SimCharger', vendorName: 'csip-ocpp-bridge' },
+            })) as { status: string };
+            this.log(`BootNotification -> ${boot.status}`);
+        }
+        await this.startTransaction();
+    }
+
+    // The sim's car is plugged in from the start, so boot starts a transaction.
+    private async startTransaction(): Promise<void> {
+        const now = () => new Date().toISOString();
+        if (this.protocol === '1.6') {
             await this.client.call('StatusNotification', { connectorId: 1, errorCode: 'NoError', status: 'Charging' });
             const tx = (await this.client.call('StartTransaction', {
                 connectorId: 1,
@@ -255,11 +307,6 @@ export class SimCharger {
             this.transactionId16 = tx.transactionId;
             this.log(`Transaction ${tx.transactionId} started`);
         } else {
-            const boot = (await this.client.call('BootNotification', {
-                reason: 'PowerUp',
-                chargingStation: { model: 'SimCharger', vendorName: 'csip-ocpp-bridge' },
-            })) as { status: string };
-            this.log(`BootNotification -> ${boot.status}`);
             await this.client.call('StatusNotification', {
                 timestamp: now(),
                 connectorStatus: 'Occupied',

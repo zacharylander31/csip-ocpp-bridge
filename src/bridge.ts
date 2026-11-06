@@ -271,6 +271,12 @@ export class Bridge {
             // Offline, or no car: 0 W. If it's really drawing, that overstates
             // the house, which leaves the chargers less: the safe side.
             if (!charger.connected || !r || site.at - r.at > this.chargerIdleAfterMs) continue;
+            if (r.stopped) {
+                // It said it stopped: 0 W, whatever caps changed since (no car to obey them).
+                // But wait for a site reading taken after that, which no longer has the car in it.
+                if (r.at > site.at) return;
+                continue;
+            }
             if (r.at < settledAt) return; // from before the change; wait for its next report
             chargersW += r.watts;
         }

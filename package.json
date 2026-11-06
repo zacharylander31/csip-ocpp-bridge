@@ -14,6 +14,7 @@
     "telemetry-demo": "tsx src/runTelemetry.ts",
     "site-demo": "tsx src/runSiteMeter.ts",
     "site-meter-demo": "tsx src/runOdeSiteMeter.ts",
+    "unplug-demo": "tsx src/runUnplug.ts",
     "ode-demo": "tsx src/runOdeMqtt.ts",
     "ocpp16-demo": "tsx src/runOcpp16.ts",
     "amps-demo": "tsx src/runAmps.ts",
