@@ -58,7 +58,10 @@ export class CsipClient implements LimitSource {
 
     // State from the last poll().
     lastUpdatedAt = 0; // ms since epoch of the last good poll; 0 = never
-    private clockOffsetSec = 0; // server clock minus local clock
+    private clockOffsetSec = 0; // server clock minus local clock: our best estimate
+    // How far it can be out: the true offset is in [clockOffsetSec - early, clockOffsetSec + late].
+    private clockEarlySec = 0;
+    private clockLateSec = 0;
     private defaultLimitW: number | undefined;
     private controls: Control[] = [];
 
@@ -107,16 +110,22 @@ export class CsipClient implements LimitSource {
         // Fetch everything first and only then update our state, so a poll that
         // fails halfway (link drops) leaves the last good state untouched
         // rather than a mix of old and new.
+        const askedAt = Date.now() / 1000;
         const tm = await this.getRequired(this.tmHref);
         const fetchedAt = Date.now() / 1000;
         // A 404 here is normal: the program has no default control.
         const dderc = this.ddercHref ? await this.get(this.ddercHref) : undefined;
         const list = await this.getRequired(this.dercHref);
 
-        // /tm rounds down to whole seconds, so the true server time is somewhere
-        // in [currentTime, currentTime + 1). Adding 0.5 puts our estimate in the
-        // middle, so it's never more than half a second out.
+        // /tm rounds down to whole seconds, and the server read its clock some
+        // time between our request and its reply. So when the reply arrived,
+        // the server's clock was somewhere in [currentTime, currentTime + 1 +
+        // round trip). Our estimate is currentTime + 0.5, and we keep how far
+        // it can be out, so activeImportLimit() can be careful near a boundary.
+        const roundTripSec = fetchedAt - askedAt;
         this.clockOffsetSec = Number(tm.currentTime) + 0.5 - fetchedAt;
+        this.clockEarlySec = 0.5;
+        this.clockLateSec = 0.5 + roundTripSec;
         this.defaultLimitW = watts(dderc?.DERControlBase?.opModImpLimW);
         this.controls = toArray<Xml>(list.DERControl).map((c) => {
             const start = Number(c.interval.start);
@@ -131,15 +140,38 @@ export class CsipClient implements LimitSource {
     }
 
     /** The import limit that applies now, from the last poll(). No network calls. */
+    //
+    // We only know the server's time to within a second or so (see poll()).
+    // Near a control's start or end either limit might apply, so take every
+    // limit that might apply right now and use the lowest. A tighter control
+    // then starts as soon as it might have started and ends only once it has
+    // certainly ended (and a looser one starts late and ends early): never
+    // over whichever limit the server meant.
     activeImportLimit(): ActiveLimit {
-        const now = Date.now() / 1000 + this.clockOffsetSec;
+        const now = Date.now() / 1000;
+        const earliest = now + this.clockOffsetSec - this.clockEarlySec;
+        const latest = now + this.clockOffsetSec + this.clockLateSec;
 
+        const candidates = [this.limitAt(earliest), this.limitAt(latest)];
+        // A control short enough to fit between the two doesn't show at either end.
+        for (const c of this.controls) {
+            if (c.importLimitW !== undefined && c.start <= latest && earliest < c.end) {
+                candidates.push({ importLimitW: c.importLimitW, source: 'control', mRID: c.mRID });
+            }
+        }
+        // No limit at all is the loosest; on a tie, the first (earliest) one.
+        const strictness = (l: ActiveLimit) => l.importLimitW ?? Infinity;
+        return candidates.reduce((best, l) => (strictness(l) < strictness(best) ? l : best));
+    }
+
+    // The limit at one server time, as if we knew it exactly.
+    private limitAt(serverSec: number): ActiveLimit {
         // Decide from start/end, not EventStatus: that was only true at poll time.
         // A control that doesn't set an import limit leaves the default in charge
         // of import. If controls overlap, the first one wins (good enough for now;
         // the real rule is that the most recently created one wins).
         const active = this.controls.find(
-            (c) => c.importLimitW !== undefined && c.start <= now && now < c.end,
+            (c) => c.importLimitW !== undefined && c.start <= serverSec && serverSec < c.end,
         );
         if (active) return { importLimitW: active.importLimitW, source: 'control', mRID: active.mRID };
         return this.defaultImportLimit();

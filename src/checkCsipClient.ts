@@ -69,6 +69,43 @@ async function main() {
         });
     }
 
+    // Near a boundary the client can't know the server's time to better than a
+    // second, so it must use the stricter limit there: the control whenever the
+    // server's real time is inside it, even if our estimate says otherwise. The
+    // estimate's error depends on where within a second we polled, so poll at
+    // a chosen point: just after a second ticks over, the estimate runs ahead
+    // (ends early if careless); just before, it runs behind (starts late).
+    // The mock's real time is this machine's clock (it only rounds /tm down).
+    for (const [fraction, why] of [[0.1, 'ahead: must not end early'], [0.9, 'behind: must not start late']] as const) {
+        const start = now() + 3;
+        const end = start + 3;
+        await scenario(`Boundaries with the estimate ${why}`, server, {
+            defaultImportLimit: { value: 5000, multiplier: 0 },
+            controls: [{ mRID: 'CTRL-EDGE', start, duration: end - start, importLimit: { value: 3, multiplier: 3 } }],
+        }, async (c) => {
+            await sleep((1000 + fraction * 1000 - (Date.now() % 1000)) % 1000);
+            await c.poll();
+            let inside = 0;
+            let missed: string | undefined; // real time inside the control, but not given the control
+            let tooLong: string | undefined; // well outside the control, but still given it
+            while (Date.now() / 1000 < end + 1.6) {
+                const real = Date.now() / 1000;
+                const limit = c.activeImportLimit().importLimitW;
+                if (real >= start && real < end) {
+                    inside++;
+                    if (limit !== 3000) missed ??= `${limit} W at ${(real - (real < start + 1.5 ? start : end)).toFixed(2)} s from the ${real < start + 1.5 ? 'start' : 'end'}`;
+                } else if ((real < start - 1.2 || real >= end + 1.2) && limit !== 5000) {
+                    tooLong ??= `${limit} W at ${(real < start ? real - start : real - end).toFixed(2)} s outside`;
+                }
+                await sleep(50);
+            }
+            const ok = inside > 20 && !missed && !tooLong;
+            if (!ok) failures++;
+            console.log(`${ok ? 'PASS' : 'FAIL'}  the control applies whenever the server's real time is inside it, and not 1.2 s past either end`);
+            if (!ok) console.log(`      ${missed ? `inside but not capped: ${missed}` : ''}${tooLong ? ` held too long: ${tooLong}` : ''}${inside <= 20 ? ` only ${inside} samples inside` : ''}`);
+        });
+    }
+
     await scenario('Energy Queensland-style "ns2" prefix', server, {
         nsPrefix: 'ns2',
         defaultImportLimit: { value: 5000, multiplier: 0 },
