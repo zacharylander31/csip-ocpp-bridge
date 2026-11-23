@@ -27,4 +27,4 @@ What the check asserts: charger capped at the 5 kW default; a 3 kW control the n
 
 - The mock reads only each reading's value and period. ODE posts many reading kinds, so the demo shows just one example value.
 - arm64 (Pi) image still untested.
-- ODE clone in the scratchpad is checked out at `v0.20.0`. The #139 fix is on its branch `fix/mirror-reading-time-period` (and in `upstream/`).
+- ODE clone in the scratchpad is checked out at `v0.20.0`. Issue #139 was confirmed and fixed upstream in ODE PR #142 (Nov 2026).

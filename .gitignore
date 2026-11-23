@@ -26,3 +26,11 @@ Thumbs.db
 /config.json
 ode/config/
 ode/logs/
+
+# Private notes and drafts, kept on the developer's machine only
+/CLAUDE.md
+/upstream/
+/drafts/
+/docs/writeup-*.md
+/plans/v0.1-tabs.md
+/plans/notes/launch-prep.md
